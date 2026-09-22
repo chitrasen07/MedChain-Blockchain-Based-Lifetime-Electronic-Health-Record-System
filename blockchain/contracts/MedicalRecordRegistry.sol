@@ -26,6 +26,11 @@ contract MedicalRecordRegistry {
         MEDICAL_DOCUMENT
     }
 
+    enum RecordOrigin {
+        CURRENT,
+        HISTORICAL
+    }
+
     struct MedicalRecord {
         string recordId;
         string patientId;
@@ -33,6 +38,9 @@ contract MedicalRecordRegistry {
         bytes32 recordHash;
         address createdBy;
         uint256 timestamp;
+        RecordOrigin recordOrigin;
+        uint256 recordDate;
+        uint256 registeredAt;
         bool active;
         bool exists;
     }
@@ -55,6 +63,7 @@ contract MedicalRecordRegistry {
     error ZeroAddress();
     error InvalidIdentifier();
     error InvalidHash();
+    error InvalidRecordDate();
     error PatientInactive();
     error RecordAlreadyExists();
     error RecordNotFound();
@@ -101,6 +110,43 @@ contract MedicalRecordRegistry {
             recordHash: recordHash,
             createdBy: msg.sender,
             timestamp: block.timestamp,
+            recordOrigin: RecordOrigin.CURRENT,
+            recordDate: block.timestamp,
+            registeredAt: block.timestamp,
+            active: true,
+            exists: true
+        });
+
+        emit MedicalRecordCreated(recordId, patientId, recordType, recordHash, msg.sender);
+        auditLog.recordAudit(msg.sender, patientId, "RECORD_CREATED", recordId, true);
+    }
+
+    function registerHistoricalRecordHash(
+        string calldata recordId,
+        string calldata patientId,
+        RecordType recordType,
+        bytes32 recordHash,
+        uint256 recordDate
+    ) external {
+        if (bytes(recordId).length == 0) revert InvalidIdentifier();
+        if (recordHash == bytes32(0)) revert InvalidHash();
+        if (recordDate == 0) revert InvalidRecordDate();
+        if (!patientRegistry.isActivePatient(patientId)) revert PatientInactive();
+        _requireWritePermission(patientId);
+
+        bytes32 key = _key(recordId);
+        if (records[key].exists) revert RecordAlreadyExists();
+
+        records[key] = MedicalRecord({
+            recordId: recordId,
+            patientId: patientId,
+            recordType: recordType,
+            recordHash: recordHash,
+            createdBy: msg.sender,
+            timestamp: block.timestamp,
+            recordOrigin: RecordOrigin.HISTORICAL,
+            recordDate: recordDate,
+            registeredAt: block.timestamp,
             active: true,
             exists: true
         });
@@ -126,6 +172,15 @@ contract MedicalRecordRegistry {
     function getRecordHash(string calldata recordId) external view returns (bytes32) {
         MedicalRecord storage record_ = _requireRecord(recordId);
         return record_.recordHash;
+    }
+
+    function getRecordMetadata(string calldata recordId)
+        external
+        view
+        returns (RecordOrigin recordOrigin, uint256 recordDate, uint256 registeredAt)
+    {
+        MedicalRecord storage record_ = _requireRecord(recordId);
+        return (record_.recordOrigin, record_.recordDate, record_.registeredAt);
     }
 
     function getRecord(string calldata recordId)
