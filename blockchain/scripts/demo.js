@@ -166,6 +166,39 @@ async function main() {
   console.log("Result:", tampered);
   results.integrity = valid === true && tampered === false;
 
+  heading("4A. EXISTING / OLDER PATIENT ONBOARDING");
+  const olderPatientId = "PATIENT-OLDER-001";
+  const olderRecordId = "RECORD-HIST-001";
+  const historicalRecordDate = Math.floor(Date.UTC(2005, 0, 1) / 1000);
+  const historicalHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("synthetic historical diagnosis"));
+  await (await patientRegistry.connect(admin).registerPatient(
+    olderPatientId,
+    "did:medchain:olderpatient001",
+    patient.address
+  )).wait();
+  await (await recordAccess.connect(patient).grantAccess(olderPatientId, doctor.address, 0)).wait();
+  await (await medicalRecords.connect(doctor).registerHistoricalRecordHash(
+    olderRecordId,
+    olderPatientId,
+    DIAGNOSIS,
+    historicalHash,
+    historicalRecordDate
+  )).wait();
+  const historicalMetadata = await medicalRecords.getRecordMetadata(olderRecordId);
+  const historicalVerified = await medicalRecords.verifyRecordHash.staticCall(olderRecordId, historicalHash);
+  console.log("Patient ID:", olderPatientId);
+  console.log("Record ID:", olderRecordId);
+  console.log("Record type: DIAGNOSIS");
+  console.log("Record origin: HISTORICAL");
+  console.log("Original record date:", historicalMetadata.recordDate.toString());
+  console.log("MedChain registration timestamp:", historicalMetadata.registeredAt.toString());
+  console.log("Record hash:", historicalHash);
+  console.log("Historical hash verification:", historicalVerified ? "PASS" : "FAIL");
+  results.historical = historicalMetadata.recordOrigin === 1n &&
+    historicalMetadata.recordDate === BigInt(historicalRecordDate) &&
+    historicalMetadata.registeredAt > historicalMetadata.recordDate &&
+    historicalVerified;
+
   heading("6. EMERGENCY ACCESS");
   const reasonHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("Emergency treatment required"));
   const duration = 30 * 60;
