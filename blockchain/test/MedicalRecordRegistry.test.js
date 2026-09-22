@@ -24,6 +24,31 @@ describe("MedicalRecordRegistry", function () {
     expect(await ctx.medicalRecords.getRecordHash("REC-10001")).to.equal(sampleHash);
   });
 
+  it("registers and verifies a historical record with separate dates", async function () {
+    const ctx = await loadFixture(fixture);
+    const recordDate = 1104537600n;
+
+    await ctx.medicalRecords
+      .connect(ctx.doctor)
+      .registerHistoricalRecordHash("REC-HIST-001", "P100245", DIAGNOSIS, sampleHash, recordDate);
+
+    const metadata = await ctx.medicalRecords.getRecordMetadata("REC-HIST-001");
+    expect(metadata.recordOrigin).to.equal(1n);
+    expect(metadata.recordDate).to.equal(recordDate);
+    expect(metadata.registeredAt).to.be.gt(recordDate);
+    expect(await ctx.medicalRecords.getRecordHash("REC-HIST-001")).to.equal(sampleHash);
+    expect(await ctx.medicalRecords.verifyRecordHash.staticCall("REC-HIST-001", sampleHash)).to.equal(true);
+  });
+
+  it("rejects unauthorized historical record creation", async function () {
+    const ctx = await loadFixture(fixture);
+    await expect(
+      ctx.medicalRecords
+        .connect(ctx.stranger)
+        .registerHistoricalRecordHash("REC-HIST-002", "P100245", DIAGNOSIS, sampleHash, 1104537600n)
+    ).to.be.revertedWithCustomError(ctx.medicalRecords, "Unauthorized");
+  });
+
   it("rejects duplicate record IDs", async function () {
     const ctx = await loadFixture(fixture);
     await ctx.medicalRecords.connect(ctx.doctor).registerRecordHash("REC-10001", "P100245", DIAGNOSIS, sampleHash);
