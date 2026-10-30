@@ -1,0 +1,26 @@
+{
+  "name": "medchain-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Authorized off-chain API for MedChain patient identity and visit references",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "migrate": "node src/migrate.js",
+    "diagnose:signer": "node scripts/diagnose-signer.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
+  }
+}
