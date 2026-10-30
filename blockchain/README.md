@@ -9,7 +9,7 @@ Clinical data stays off-chain. The chain stores identifiers, cryptographic hashe
 | Contract | File | Responsibility |
 | --- | --- | --- |
 | `RoleManager` | `contracts/RoleManager.sol` | Hospital roles on OpenZeppelin AccessControl |
-| `PatientRegistry` | `contracts/PatientRegistry.sol` | Patient ID, DID/reference, controller wallet, active flag |
+| `PatientRegistry` | `contracts/PatientRegistry.sol` | Patient ID, generated DID/reference, optional identity commitment, controller wallet, active flag |
 | `RecordAccessControl` | `contracts/AccessControl.sol` | Permanent or time-limited record access grants |
 | `EmergencyAccess` | `contracts/EmergencyAccess.sol` | Temporary emergency access with mandatory expiry |
 | `MedicalRecordRegistry` | `contracts/MedicalRecordRegistry.sol` | Record hash registration and verification |
@@ -22,6 +22,8 @@ Clinical data stays off-chain. The chain stores identifiers, cryptographic hashe
 A public or consortium ledger is replicated. Names, diagnoses, prescriptions, and documents must not be written to it. These contracts store:
 
 - `patientId` / DID references
+- DIDs generated as `keccak256(domain, registry address, registration number)`; callers never provide a DID
+- Optional high-entropy `bytes32` identity commitments from a trusted off-chain identity service
 - controller and staff wallet addresses
 - `bytes32` hashes of off-chain records and emergency reason references
 - permission windows and timestamps
@@ -55,6 +57,25 @@ The patient controller wallet or a hospital/super admin may `grantAccess` / `rev
 - `expiresAt > now` ⇒ time-limited; `hasAccess` is false after expiry
 
 Staff cannot grant themselves access.
+
+## Patient registration and identity commitments
+
+Hospital administrators call `PatientRegistry.registerPatient(controller)`. The registry
+assigns the next sequential ID (`PATIENT-000001`) and generates a unique
+`did:medchain:0x...` value from the registry address and registration number. A reverted
+transaction does not consume the number.
+
+For duplicate detection backed by an identity service, an administrator may call
+`registerPatientWithIdentityCommitment(controller, identityCommitment)`. The commitment
+must be generated off chain with a high-entropy secret. Raw Aadhaar, PAN, passport,
+driving-licence numbers, names, dates of birth, and other personal data must never be
+sent to this contract. The registry rejects a commitment already used on that registry.
+The commitment path is only a blockchain-side foundation: matching and verification by a
+trusted off-chain service is not implemented here.
+
+One deployed registry can serve multiple authorized hospitals on the same blockchain.
+Separate blockchain networks do not share this registry automatically; cross-chain
+identity resolution would require a separately designed identity service.
 
 ## Emergency access
 
@@ -91,5 +112,23 @@ In another terminal:
 ```bash
 npx hardhat run scripts/deploy.js --network localhost
 ```
+
+### Remix VM deployment order
+
+Deploy the contracts in this order, using the deployed addresses as constructor
+arguments:
+
+1. `RoleManager()` (no arguments)
+2. `AuditLog(roleManagerAddress)`
+3. `PatientRegistry(roleManagerAddress, auditLogAddress)`
+4. `RecordAccessControl(roleManagerAddress, patientRegistryAddress, auditLogAddress)`
+5. `EmergencyAccess(roleManagerAddress, patientRegistryAddress, auditLogAddress)`
+6. `MedicalRecordRegistry(roleManagerAddress, patientRegistryAddress, recordAccessAddress, emergencyAccessAddress, auditLogAddress)`
+
+Using the `SUPER_ADMIN` account from `RoleManager`, call
+`AuditLog.setAuthorizedLogger(address, true)` for `PatientRegistry`,
+`RecordAccessControl`, `EmergencyAccess`, and `MedicalRecordRegistry`. Assign the
+`HOSPITAL_ADMIN` role before attempting patient registration. These steps are for a
+local Remix VM only; no live-network deployment is performed by this project.
 
 Do not use a public network until the rest of MedChain is ready.
