@@ -80,11 +80,28 @@ async function deploySystem() {
   };
 }
 
-async function registerSamplePatient(ctx, patientId = "P100245") {
-  await ctx.patientRegistry
+async function registerSamplePatient(ctx) {
+  const tx = await ctx.patientRegistry
     .connect(ctx.hospitalAdmin)
-    .registerPatient(patientId, "did:medchain:abc123", ctx.patient.address);
-  return patientId;
+    .registerPatient(ctx.patient.address);
+
+  const receipt = await tx.wait();
+
+  const event = receipt.logs
+    .map((log) => {
+      try {
+        return ctx.patientRegistry.interface.parseLog(log);
+      } catch {
+        return null;
+      }
+    })
+    .find((parsed) => parsed && parsed.name === "PatientRegistered");
+
+  if (!event) {
+    throw new Error("PatientRegistered event not found");
+  }
+
+  return event.args.patientId;
 }
 
 module.exports = { deploySystem, registerSamplePatient };
