@@ -118,9 +118,18 @@ async function main() {
   console.log("Admin is hospital admin:", await roleManager.isHospitalAdmin(admin.address));
 
   heading("2. PATIENT REGISTRATION");
-  const patientId = "PATIENT-001";
-  const did = "did:medchain:patient001";
-  await (await patientRegistry.connect(admin).registerPatient(patientId, did, patient.address)).wait();
+  const registration = await patientRegistry.connect(admin).registerPatient(patient.address);
+  const registrationReceipt = await registration.wait();
+  const registrationEvent = registrationReceipt.logs
+    .map((log) => {
+      try {
+        return patientRegistry.interface.parseLog(log);
+      } catch {
+        return null;
+      }
+    })
+    .find((parsed) => parsed && parsed.name === "PatientRegistered");
+  const patientId = registrationEvent.args.patientId;
   const exists = await patientRegistry.patientExists(patientId);
   const patientInfo = await patientRegistry.getPatient(patientId);
   results.patient =
@@ -167,15 +176,21 @@ async function main() {
   results.integrity = valid === true && tampered === false;
 
   heading("4A. EXISTING / OLDER PATIENT ONBOARDING");
-  const olderPatientId = "PATIENT-OLDER-001";
   const olderRecordId = "RECORD-HIST-001";
   const historicalRecordDate = Math.floor(Date.UTC(2005, 0, 1) / 1000);
   const historicalHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("synthetic historical diagnosis"));
-  await (await patientRegistry.connect(admin).registerPatient(
-    olderPatientId,
-    "did:medchain:olderpatient001",
-    patient.address
-  )).wait();
+  const olderRegistration = await patientRegistry.connect(admin).registerPatient(patient.address);
+  const olderRegistrationReceipt = await olderRegistration.wait();
+  const olderRegistrationEvent = olderRegistrationReceipt.logs
+    .map((log) => {
+      try {
+        return patientRegistry.interface.parseLog(log);
+      } catch {
+        return null;
+      }
+    })
+    .find((parsed) => parsed && parsed.name === "PatientRegistered");
+  const olderPatientId = olderRegistrationEvent.args.patientId;
   await (await recordAccess.connect(patient).grantAccess(olderPatientId, doctor.address, 0)).wait();
   await (await medicalRecords.connect(doctor).registerHistoricalRecordHash(
     olderRecordId,
