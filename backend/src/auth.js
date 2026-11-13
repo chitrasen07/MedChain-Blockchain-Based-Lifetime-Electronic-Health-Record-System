@@ -14,7 +14,7 @@ function requireAuth(secret, roles = [], { loadUser } = {}) {
       Promise.resolve(loadUser(claims.sub)).then((user) => {
         if (!user || user.status !== "active") return res.status(401).json({ error: "Authentication required" });
         if (roles.length && !roles.includes(user.role)) return res.status(403).json({ error: "Insufficient permissions" });
-        req.user = user;
+        req.user = { ...user, sub: user.id };
         next();
       }).catch(next);
     } catch {
