@@ -40,11 +40,25 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "Registration review is not ready",
   "Do not send a recovery secret.",
   "The hospital wallet cannot anchor a medical record. Patient consent is required.",
+  "The hospital signing wallet cannot grant, revoke, or use patient consent.",
+  "Patient consent is required.",
+  "Emergency access is limited to necessary medical information.",
+  "Connect the clinical wallet that holds patient consent.",
+  "This wallet is not eligible clinical staff on-chain.",
+  "This wallet is not an emergency responder.",
+  "Emergency access is in cooldown.",
+  "Clinical wallet could not be verified.",
 ]);
 
 function errorForStatus(status, serverMessage) {
-  if (status === 401) return new ApiError(FAILURE_MESSAGES.unauthorized, { status, code: "unauthorized" });
-  if (status === 403) return new ApiError(FAILURE_MESSAGES.forbidden, { status, code: "forbidden" });
+  if (status === 401) {
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage) ? serverMessage : FAILURE_MESSAGES.unauthorized;
+    return new ApiError(message, { status, code: "unauthorized" });
+  }
+  if (status === 403) {
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage) ? serverMessage : FAILURE_MESSAGES.forbidden;
+    return new ApiError(message, { status, code: "forbidden" });
+  }
   if (status === 400) {
     const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage)
       ? serverMessage
@@ -77,9 +91,7 @@ const REQUEST_MESSAGES = {
 };
 
 export function messageForRequest(error) {
-  if ((error?.code === "conflict" || error?.code === "invalid") && PUBLIC_REQUEST_MESSAGES.has(error.message)) {
-    return error.message;
-  }
+  if (PUBLIC_REQUEST_MESSAGES.has(error?.message)) return error.message;
   return REQUEST_MESSAGES[error?.code] ?? REQUEST_MESSAGES.server;
 }
 

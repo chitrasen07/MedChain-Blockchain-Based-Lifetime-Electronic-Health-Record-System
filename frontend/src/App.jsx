@@ -10,7 +10,7 @@ import {
   AdminReviewsPage,
   AdminStaffPage,
 } from "./pages/admin/AdminPages";
-import { DoctorLookupPage, DoctorOverviewPage, DoctorRecordsPage, DoctorVisitsPage } from "./pages/doctor/DoctorPages";
+import { DoctorEmergencyPage, DoctorLookupPage, DoctorOverviewPage, DoctorRecordsPage, DoctorVisitsPage } from "./pages/doctor/DoctorPages";
 import { EmergencyDashboardPage } from "./pages/emergency/EmergencyDashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -30,7 +30,7 @@ import {
   ReceptionistOverviewPage,
 } from "./pages/receptionist/ReceptionistPages";
 import { ReviewerMatchingPage, ReviewerOverviewPage, ReviewerQueuePage } from "./pages/reviewer/ReviewerPages";
-import { StaffLookupPage, StaffOverviewPage, StaffRecordsPage, StaffVisitsPage } from "./pages/staff/StaffPages";
+import { StaffEmergencyPage, StaffLookupPage, StaffOverviewPage, StaffRecordsPage, StaffVisitsPage } from "./pages/staff/StaffPages";
 import { UnauthorizedPage } from "./pages/UnauthorizedPage";
 import { WelcomePage } from "./pages/WelcomePage";
 
@@ -60,6 +60,7 @@ export default function App() {
             <Route path="/doctor/lookup" element={<DoctorLookupPage />} />
             <Route path="/doctor/visits" element={<DoctorVisitsPage />} />
             <Route path="/doctor/records" element={<DoctorRecordsPage />} />
+            <Route path="/doctor/emergency" element={<DoctorEmergencyPage />} />
           </Route>
         </Route>
 
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="/staff/lookup" element={<StaffLookupPage />} />
             <Route path="/staff/visits" element={<StaffVisitsPage />} />
             <Route path="/staff/records" element={<StaffRecordsPage />} />
+            <Route path="/staff/emergency" element={<StaffEmergencyPage />} />
           </Route>
         </Route>
 

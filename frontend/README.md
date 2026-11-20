@@ -44,8 +44,10 @@ Do not put backend secrets, private keys, or database credentials in this folder
 | `/staff` | Hospital staff workspace |
 | `/reviewer` | Review workspace |
 | `/patient/login` | Patient wallet sign-in and recovery-code check |
-| `/patient` | Patient dashboard, identity, ownership, visits, and profile |
-| `/emergency` | Placeholder. The API has no emergency-staff login. |
+| `/patient` | Patient dashboard, identity, ownership, history, records, access, and profile |
+| `/doctor/records` and `/staff/records` | Encrypted clinical entries. Sepolia anchoring is not broadcast |
+| `/doctor/emergency` and `/staff/emergency` | Emergency request preparation for a signed-in clinician |
+| `/emergency` | Notice only. There is no separate emergency login, and this page sends no transaction |
 
 Registration accepts either a patient wallet address or a recovery code
 generated in the browser. The recovery secret is not included in the API

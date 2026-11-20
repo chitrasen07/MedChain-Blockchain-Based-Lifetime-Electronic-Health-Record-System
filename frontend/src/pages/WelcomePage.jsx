@@ -10,7 +10,7 @@ const roles = [
   },
   {
     name: "Doctor",
-    detail: "Patient lookup and a clinical visit reference. The chart stays off-chain.",
+    detail: "Lookup, encrypted clinical entries, and emergency requests. Sepolia writes stay off until approval.",
   },
   {
     name: "Receptionist",
@@ -18,7 +18,7 @@ const roles = [
   },
   {
     name: "Hospital Staff",
-    detail: "Patient lookup and visit references inside one hospital.",
+    detail: "Lookup, visit references, and encrypted clinical entries inside one hospital.",
   },
   {
     name: "Reviewer",
@@ -49,7 +49,7 @@ export function WelcomePage() {
             <a href="#integrity" className="hidden rounded-md px-2 py-2 text-sm font-medium text-ink hover:text-navy md:inline">
               Integrity
             </a>
-            <Link to="/patient/login" className="hidden rounded-md px-2 py-2 text-sm font-medium text-ink hover:text-navy sm:inline">
+            <Link to="/patient/login" className="rounded-md px-2 py-2 text-sm font-medium text-ink hover:text-navy">
               Patient
             </Link>
             <Button to="/login" size="sm" className="shrink-0">
@@ -153,14 +153,13 @@ export function WelcomePage() {
             <article className="rounded-xl border border-line bg-surface px-5 py-4">
               <h3 className="text-sm font-semibold tracking-tight text-navy">Patient</h3>
               <p className="mt-1 text-sm leading-6 text-muted">
-                Wallet sign-in for a confirmed lifetime ID. Recovery codes stay in the browser. Records and permissions
-                are not loaded yet.
+                Wallet sign-in for a confirmed lifetime ID. Records and consent are shown for that patient. A public claim is not sent from this site.
               </p>
             </article>
             <article className="rounded-xl border border-dashed border-line bg-canvas px-5 py-4">
               <h3 className="text-sm font-semibold tracking-tight text-navy">Emergency staff</h3>
               <p className="mt-1 text-sm leading-6 text-muted">
-                Not available. There is no emergency-staff login. The emergency screen does not request chain access.
+                There is no separate emergency login. A signed-in doctor or hospital staff member prepares the request. This page does not send one.
               </p>
             </article>
           </div>
@@ -206,7 +205,7 @@ export function WelcomePage() {
             <Link to="/patient/login" className="mt-3 block text-sm font-medium text-teal hover:text-teal-dark">
               Patient login
             </Link>
-            <p className="mt-2 text-sm leading-6 text-muted">Emergency-staff sign-in is not part of the current API.</p>
+            <p className="mt-2 text-sm leading-6 text-muted">Emergency requests are prepared by a signed-in doctor or hospital staff member. This site does not send them to Sepolia.</p>
           </div>
         </div>
         <div className="border-t border-line">

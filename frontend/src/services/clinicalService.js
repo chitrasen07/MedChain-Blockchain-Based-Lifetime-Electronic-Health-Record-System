@@ -51,4 +51,27 @@ export const clinicalService = {
   list(patientId) {
     return apiClient.request(`/patients/${encodeURIComponent(patientId)}/records`);
   },
+  async bindWallet(walletAddress, sign) {
+    const challenge = await apiClient.request("/clinical-wallet/challenge", {
+      method: "POST",
+      body: { walletAddress },
+    });
+    const signature = await sign(challenge.message, walletAddress);
+    return apiClient.request("/clinical-wallet/session", {
+      method: "POST",
+      body: { walletAddress, nonce: challenge.nonce, signature },
+    });
+  },
+  prepareAnchor(patientId, recordId) {
+    return apiClient.request(`/patients/${encodeURIComponent(patientId)}/records/${encodeURIComponent(recordId)}/anchor`, {
+      method: "POST",
+      body: {},
+    });
+  },
+  prepareEmergency(patientId, body) {
+    return apiClient.request(`/patients/${encodeURIComponent(patientId)}/emergency-access`, { method: "POST", body });
+  },
+  listEmergency(patientId) {
+    return apiClient.request(`/patients/${encodeURIComponent(patientId)}/emergency-access`);
+  },
 };

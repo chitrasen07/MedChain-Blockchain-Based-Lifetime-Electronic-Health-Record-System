@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "../components/Button";
+import { VerificationNotice } from "../components/VerificationNotice";
 import { Card } from "../components/Card";
 import { EmptyState } from "../components/EmptyState";
 import { Input } from "../components/Input";
@@ -7,8 +8,10 @@ import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, messageForRequest } from "../lib/api";
+import { anchorCalldata, consentBroadcastAllowed, sendPreparedTransaction } from "../lib/consentChain";
 import { sepoliaTransactionUrl } from "../lib/ownership";
 import { pageChrome } from "../lib/pageChrome";
+import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
 import { CLINICAL_FIELDS, clinicalRequestBody, clinicalService } from "../services/clinicalService";
 
 const CATEGORY_LABELS = {
@@ -33,10 +36,37 @@ export function ClinicalRecordScreen({ pageKey }) {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [walletAddress, setWalletAddress] = useState("");
+  const [chainId, setChainId] = useState(null);
+  const anchorAllowed = consentBroadcastAllowed(chainId) && Boolean(import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
+    const ethereum = globalThis.window?.ethereum;
+    if (!ethereum?.request) return undefined;
+    let active = true;
+    ethereum.request({ method: "eth_chainId" }).then((value) => {
+      if (active) setChainId(Number(value));
+    }).catch(() => {
+      if (active) setChainId(null);
+    });
+    return () => {
+      active = false;
+    };
   }, [page.title]);
+
+  async function connectWallet() {
+    setNotice("");
+    try {
+      const address = await connectPatientWallet();
+      await clinicalService.bindWallet(address, signPatientLogin);
+      setWalletAddress(address);
+      setNotice("Clinical wallet connected. Chart access still requires patient consent or an active emergency grant.");
+    } catch (error) {
+      setWalletAddress("");
+      setNotice(error instanceof ApiError ? messageForRequest(error) : error?.message || "The wallet was not connected. No transaction was sent.");
+    }
+  }
 
   async function load(id) {
     setLoading(true);
@@ -53,6 +83,32 @@ export function ClinicalRecordScreen({ pageKey }) {
           : "The hospital service could not complete the request.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function anchorRecord(record) {
+    setNotice("");
+    try {
+      const prepared = await clinicalService.prepareAnchor(patientId.trim().toUpperCase(), record.id);
+      const local = anchorCalldata({
+        versionIndex: record.versionIndex,
+        recordRef: record.recordRef,
+        patientRef: prepared.patientRef,
+        contentHash: record.contentHash,
+      });
+      if (!local || local !== prepared.data || prepared.contentHash !== record.contentHash) {
+        setNotice("The prepared transaction did not match this record. Nothing was sent.");
+        return;
+      }
+      await sendPreparedTransaction({
+        chainId,
+        contractAddress: import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY,
+        data: local,
+        ethereum: globalThis.window?.ethereum,
+      });
+      setNotice("The hash was sent from the clinical wallet on the local network.");
+    } catch (error) {
+      setNotice(error instanceof ApiError ? messageForRequest(error) : error?.message || "The anchor was not sent.");
     }
   }
 
@@ -82,11 +138,18 @@ export function ClinicalRecordScreen({ pageKey }) {
   return (
     <div>
       <PageHeader eyebrow={page.eyebrow} title={page.title} description={page.description} crumbs={crumbs} />
+      <VerificationNotice>
+        Saving a chart requires a consented clinical wallet. Anchoring that hash on Sepolia is prepared here and is not broadcast.
+      </VerificationNotice>
       <form onSubmit={onSubmit} noValidate>
         <Card
           title="Clinical entry"
-          description="The entry is encrypted in the hospital database. The hash is not anchored, because the hospital wallet cannot grant or bypass patient consent."
+          description="The entry is encrypted in the hospital database. Reading or saving it requires the connected wallet to have patient consent or emergency access. The hospital signing key is not used."
         >
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <Button type="button" variant="secondary" onClick={connectWallet}>Connect clinical wallet</Button>
+            <p className="text-sm text-muted">{walletAddress || "No clinical wallet connected."}</p>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Input label="Patient ID" name="patientId" value={patientId} onChange={(event) => setPatientId(event.target.value)} placeholder="PATIENT-000001" />
             <Input label="Recorded on" name="recordedOn" type="date" value={recordedOn} onChange={(event) => setRecordedOn(event.target.value)} />
@@ -116,12 +179,11 @@ export function ClinicalRecordScreen({ pageKey }) {
             <Button type="button" variant="secondary" onClick={() => load(patientId.trim().toUpperCase())} loading={loading} disabled={loading || saving}>
               Load history
             </Button>
-            <Button type="submit" loading={saving} disabled={loading || saving}>Save encrypted entry</Button>
-            <Button type="button" variant="secondary" disabled>
-              Anchor on chain
-            </Button>
+            <Button type="submit" loading={saving} disabled={loading || saving || !walletAddress}>Save encrypted entry</Button>
           </div>
-          <p className="mt-3 text-xs leading-5 text-muted">Anchoring stays disabled. A consented medical-staff wallet must submit the hash. This screen does not use the hospital signing key.</p>
+          <p className="mt-3 text-xs leading-5 text-muted">
+            Anchoring is signed by the consented clinical wallet. It stays disabled on Sepolia until a public transaction is approved. The hospital signing key cannot grant consent or submit the hash.
+          </p>
         </Card>
       </form>
       <Card className="mt-4" title="Stored entries">
@@ -141,7 +203,10 @@ export function ClinicalRecordScreen({ pageKey }) {
                   <p className="mt-1 text-xs text-muted">{record.recordedOn} · version {record.versionIndex}</p>
                   <p className="mt-2 text-sm leading-6 text-ink">{Object.entries(record.content || {}).filter(([key]) => key !== "category" && key !== "recordedOn").map(([, value]) => value).join(" · ")}</p>
                   <p className="mt-1 break-all text-xs text-muted">{record.contentHash}</p>
-                  {explorer ? <a className="mt-1 inline-flex break-all text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : null}
+                  {explorer ? <a className="mt-1 inline-flex break-all text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : <p className="mt-1 text-xs text-muted">No transaction reference.</p>}
+                  <Button className="mt-2" type="button" variant="secondary" disabled={!anchorAllowed || !walletAddress} onClick={() => anchorRecord(record)}>
+                    Anchor this version
+                  </Button>
                 </li>
               );
             })}

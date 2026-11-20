@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const { Contract, FetchRequest, JsonRpcProvider, Wallet, id } = require("ethers");
+const { createConsentReads, unavailable } = require("./consentReader");
 
 const DUPLICATE_COMMITMENT_SELECTOR = id("IdentityCommitmentAlreadyExists()").slice(0, 10);
 const ABI = [
@@ -48,7 +49,8 @@ function createDisabledBlockchainAdapter() {
     reconcileRegistration: reject,
     commitmentExists: reject,
     verifySigner: reject,
-    getController: reject
+    getController: reject,
+    ...unavailable(blockchainUnavailable)
   };
 }
 
@@ -122,6 +124,12 @@ const provider = new JsonRpcProvider(request);
       };
     },
     identityCommitment,
+    ...createConsentReads({
+      provider,
+      registryAddress: config.registryAddress,
+      signerAddress: wallet.address,
+      fail: blockchainUnavailable
+    })
   };
 }
 

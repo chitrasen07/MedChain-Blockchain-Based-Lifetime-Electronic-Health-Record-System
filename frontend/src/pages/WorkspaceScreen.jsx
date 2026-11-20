@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ShieldExclamationPoint } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { PageHeader } from "../components/PageHeader";
@@ -20,7 +21,7 @@ export function WorkspaceScreen({ pageKey }) {
         title={page.title}
         description={page.description}
         crumbs={crumbs}
-        actions={page.kind === "pending" ? <StatusBadge tone="warning">Backend integration pending</StatusBadge> : null}
+        actions={page.kind === "pending" ? <StatusBadge tone="warning">Awaiting live verification</StatusBadge> : null}
       />
 
       {page.kind === "pending" ? (
@@ -42,6 +43,11 @@ export function WorkspaceScreen({ pageKey }) {
             {page.items.map((item) => (
               <Card key={item.title} title={item.title}>
                 <p className="text-sm leading-6 text-muted">{item.text}</p>
+                {item.to ? (
+                  <Link className="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-teal hover:text-teal-dark" to={item.to}>
+                    Open
+                  </Link>
+                ) : null}
               </Card>
             ))}
           </div>

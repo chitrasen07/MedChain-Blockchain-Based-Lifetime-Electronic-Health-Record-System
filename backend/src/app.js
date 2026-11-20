@@ -290,7 +290,7 @@ function createApp({ db, blockchain, config }) {
   });
 
   registerPatientAuth(app, { db, blockchain, config, authRateLimit });
-  registerClinicalRecords(app, { db, config });
+  registerClinicalRecords(app, { db, blockchain, config, authRateLimit });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {
@@ -304,9 +304,10 @@ function createApp({ db, blockchain, config }) {
     const publicError = error.code === "23505" && error.constraint === "users_email_key"
       ? Object.assign(new Error("A staff account with this email already exists."), { statusCode: 409 })
       : error;
-    console.error("request failed", publicError.message);
     const publicStatus = [400, 401, 403, 404, 409].includes(publicError.statusCode) ? publicError.statusCode : publicError.statusCode === 503 ? 503 : 500;
     const publicMessage = publicStatus === 503 ? "Service unavailable" : publicStatus === 500 ? "Internal server error" : publicError.message;
+    if (publicStatus >= 500) console.error("request failed");
+    else console.error("request rejected", publicStatus);
     res.status(publicStatus).json({ error: publicMessage });
   });
   return app;

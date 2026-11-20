@@ -68,6 +68,18 @@ function harness(overrides = {}) {
     async submitRegistration() {
       calls.push("submit");
       throw new Error("broadcast");
+    },
+    async listConsent() {
+      calls.push("consent");
+      return [];
+    },
+    async listEmergency() {
+      calls.push("emergency");
+      return [];
+    },
+    async listAudit() {
+      calls.push("audit");
+      return [];
     }
   };
   const app = createApp({
@@ -194,7 +206,7 @@ test("a signature from a different wallet is rejected and the challenge cannot b
 test("patient and staff tokens stay on their own routes", async () => {
   const wallet = Wallet.createRandom();
   const staff = { id: "staff-1", role: "administrator", hospital_id: "hospital-a", status: "active" };
-  const { app } = harness({
+  const { app, calls } = harness({
     staff,
     controllers: { [refA]: wallet.address },
     patients: [patient("patient-a", "PATIENT-000001", refA)],
@@ -222,8 +234,11 @@ test("patient and staff tokens stay on their own routes", async () => {
   assert.deepEqual(records.body.records, []);
   assert.equal(records.body.anchoring, "disabled");
   assert.deepEqual(access.body.permissions, []);
-  assert.equal(access.body.grantingDisabled, true);
+  assert.deepEqual(access.body.emergency, []);
+  assert.equal(access.body.grantingDisabled, false);
+  assert.equal(access.body.broadcast, "disabled");
   assert.equal(access.body.status, "consent_required");
+  assert.equal(calls.includes("submit"), false);
 });
 
 test("a recovery commitment can be checked without a secret, a token, or a transaction", async () => {

@@ -229,14 +229,60 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
     } catch (error) { next(error); }
   });
 
-  app.get("/patient-portal/access", patient, (_req, res) => {
-    res.json({
-      status: "consent_required",
-      permissions: [],
-      grantingDisabled: true,
-      message: "Only the patient controller can grant consent. This portal does not submit a grant, and the hospital wallet cannot grant it."
-    });
+  app.get("/patient-portal/access", patient, async (req, res, next) => {
+    try {
+      const controller = await readController(blockchain, req.patient.did);
+      const wallet = req.patient.walletAddress.toLowerCase();
+      const grantingDisabled = controller === ZERO_ADDRESS || controller !== wallet;
+      if (typeof blockchain.listConsent !== "function" || typeof blockchain.listEmergency !== "function" || typeof blockchain.listAudit !== "function") {
+        throw chainUnavailable();
+      }
+      const [permissions, emergency, chainAudit] = await Promise.all([
+        blockchain.listConsent(req.patient.did),
+        blockchain.listEmergency(req.patient.did),
+        blockchain.listAudit(req.patient.did)
+      ]);
+      const local = typeof db.listAccessAuditForPatient === "function"
+        ? await db.listAccessAuditForPatient(req.patient.id)
+        : [];
+      const key = requiredKey(config.piiEncryptionKey, "PII_ENCRYPTION_KEY", 32);
+      res.json({
+        status: permissions.some((permission) => permission.active) || emergency.some((session) => session.active) ? "active" : "consent_required",
+        permissions,
+        emergency: emergency.map((session) => ({
+          ...session,
+          reason: reasonForPatient(local, session.reasonHash, key)
+        })),
+        audit: [
+          ...chainAudit,
+          ...local.map((row) => ({
+            actor: getAddress(row.actorWallet),
+            action: row.actionCode,
+            timestamp: row.createdAt,
+            success: true,
+            source: "hospital"
+          }))
+        ],
+        patientRef: req.patient.did,
+        grantingDisabled,
+        broadcast: "disabled",
+        message: grantingDisabled
+          ? "Only the patient controller can grant consent. No grant is submitted from the hospital wallet."
+          : "Prepare the grant in this browser and sign it with the controller wallet. Public networks are not sent without approval."
+      });
+    } catch (error) { next(error); }
   });
+}
+
+function reasonForPatient(rows, reasonHash, key) {
+  const row = rows.find((item) => item.reasonHash === reasonHash && item.reasonCiphertext);
+  if (!row) return null;
+  try {
+    const value = decryptJson(row.reasonCiphertext, key);
+    return typeof value.reason === "string" ? value.reason : null;
+  } catch {
+    return null;
+  }
 }
 
 module.exports = { registerPatientAuth, patientLoginMessage, CLAIM_DELAY_SECONDS };

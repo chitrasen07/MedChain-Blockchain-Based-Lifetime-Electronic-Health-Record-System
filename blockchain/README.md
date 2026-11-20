@@ -31,10 +31,10 @@ Sequential patient numbers, DIDs derived from those numbers, diagnosis categorie
 
 ## Record hashing
 
-Off-chain record (backend later):
+The API stores the clinical JSON encrypted in PostgreSQL. The chain receives only:
 
 ```text
-SHA-256(canonical record bytes) → bytes32 recordHash
+keccak256(utf8(stable JSON of the clinical fields)) → bytes32 recordHash
 ```
 
 On-chain:

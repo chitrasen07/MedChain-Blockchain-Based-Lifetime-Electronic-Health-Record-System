@@ -2,9 +2,25 @@ const { Pool } = require("pg");
 const crypto = require("node:crypto");
 const { fieldHash, encryptJson, requiredKey, hashPassword, verifyPassword } = require("./crypto");
 
+function poolConfig(connectionString) {
+  const options = { connectionString };
+  let mode = "";
+  let host = "";
+  try {
+    const parsed = new URL(connectionString);
+    mode = parsed.searchParams.get("sslmode") || "";
+    host = parsed.hostname;
+  } catch { mode = ""; }
+  if (mode === "require" || mode === "verify-ca" || mode === "verify-full") {
+    options.ssl = { rejectUnauthorized: true };
+    if (host.endsWith(".neon.tech")) options.sslnegotiation = "direct";
+  }
+  return options;
+}
+
 function createDb(config) {
   if (!config.databaseUrl) throw new Error("DATABASE_URL is required");
-  const pool = new Pool({ connectionString: config.databaseUrl });
+  const pool = new Pool(poolConfig(config.databaseUrl));
   const encryptionKey = requiredKey(config.piiEncryptionKey, "PII_ENCRYPTION_KEY", 32);
   const identityKey = Buffer.from(config.identityCommitmentKey, "utf8");
   const query = (text, values) => pool.query(text, values);
@@ -330,6 +346,58 @@ function createDb(config) {
       );
       return result.rows;
     },
+    async createClinicalChallenge({ userId, walletAddress, nonce, message, expiresAt }) {
+      await query(
+        "INSERT INTO clinical_wallet_challenges (user_id, wallet_address, nonce, message, expires_at) VALUES ($1,$2,$3,$4,$5)",
+        [userId, walletAddress, nonce, message, expiresAt]
+      );
+    },
+    async consumeClinicalChallenge(nonce) {
+      const result = await query(
+        "UPDATE clinical_wallet_challenges SET used_at = now() WHERE nonce = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id AS \"userId\", wallet_address AS \"walletAddress\", message",
+        [nonce]
+      );
+      return result.rows[0] || null;
+    },
+    async saveClinicalWallet({ userId, walletAddress, expiresAt }) {
+      await query(
+        "INSERT INTO clinical_wallet_sessions (user_id, wallet_address, expires_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET wallet_address = EXCLUDED.wallet_address, expires_at = EXCLUDED.expires_at",
+        [userId, walletAddress, expiresAt]
+      );
+    },
+    async getClinicalWallet(userId) {
+      const result = await query(
+        "SELECT wallet_address AS \"walletAddress\" FROM clinical_wallet_sessions WHERE user_id = $1 AND expires_at > now()",
+        [userId]
+      );
+      return result.rows[0]?.walletAddress || null;
+    },
+    async createAccessAudit(input) {
+      const result = await query(
+        "INSERT INTO access_audit_events (hospital_id, patient_id, patient_ref, actor_wallet, action_code, reason_ciphertext, reason_hash, tx_hash, expires_at) SELECT $1, id, $3, $4, $5, $6, $7, $8, $9 FROM patients WHERE patient_id = $2 AND hospital_id = $1 AND status = 'confirmed' RETURNING id",
+        [input.hospitalId, input.publicPatientId, input.patientRef, input.actorWallet, input.actionCode, input.reasonCiphertext, input.reasonHash, input.txHash, input.expiresAt]
+      );
+      if (!result.rowCount) {
+        const error = new Error("Patient not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      return result.rows[0];
+    },
+    async listAccessAuditForPatient(patientId) {
+      const result = await query(
+        "SELECT actor_wallet AS \"actorWallet\", action_code AS \"actionCode\", reason_ciphertext AS \"reasonCiphertext\", reason_hash AS \"reasonHash\", tx_hash AS \"txHash\", expires_at AS \"expiresAt\", created_at AS \"createdAt\" FROM access_audit_events WHERE patient_id = $1 ORDER BY created_at ASC",
+        [patientId]
+      );
+      return result.rows;
+    },
+    async listAccessAuditForHospital(publicPatientId, hospitalId) {
+      const result = await query(
+        "SELECT e.actor_wallet AS \"actorWallet\", e.action_code AS \"actionCode\", e.reason_ciphertext AS \"reasonCiphertext\", e.reason_hash AS \"reasonHash\", e.tx_hash AS \"txHash\", e.expires_at AS \"expiresAt\", e.created_at AS \"createdAt\" FROM access_audit_events e JOIN patients p ON p.id = e.patient_id WHERE p.patient_id = $1 AND e.hospital_id = $2 ORDER BY e.created_at ASC",
+        [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
     async listPatientVisits(patientId) {
       const result = await query(
         "SELECT id, record_reference AS \"recordReference\", record_hash AS \"recordHash\", created_at AS \"createdAt\" FROM visits WHERE patient_id = $1 ORDER BY created_at ASC",
@@ -341,4 +409,4 @@ function createDb(config) {
   };
 }
 
-module.exports = { createDb };
+module.exports = { createDb, poolConfig };

@@ -3,6 +3,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
+const { poolConfig } = require("./db");
 
 async function migrationFiles(migrationsDirectory) {
   const entries = await fs.readdir(migrationsDirectory, { withFileTypes: true });
@@ -56,7 +57,7 @@ async function runMigrations(pool, migrationsDirectory) {
 
 async function main() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new Pool(poolConfig(process.env.DATABASE_URL));
   try {
     await runMigrations(pool, path.join(__dirname, "..", "migrations"));
   } finally {

@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: medchain-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: BOOTSTRAP_SECRET
+        sync: false
+      - key: IDENTITY_COMMITMENT_KEY
+        sync: false
+      - key: PII_ENCRYPTION_KEY
+        sync: false
+      - key: BLOCKCHAIN_ENABLED
+        value: "true"
+      - key: RPC_URL
+        sync: false
+      - key: PATIENT_REGISTRY_ADDRESS
+        value: "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806"
+      - key: BLOCKCHAIN_PRIVATE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false

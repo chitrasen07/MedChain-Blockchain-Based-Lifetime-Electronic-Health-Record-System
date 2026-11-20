@@ -37,6 +37,7 @@ export const workspaces = {
       { label: "Patient Lookup", to: "/doctor/lookup", icon: Search },
       { label: "Visit References", to: "/doctor/visits", icon: FileSearch },
       { label: "Clinical records", to: "/doctor/records", icon: ClipboardList },
+      { label: "Emergency access", to: "/doctor/emergency", icon: ShieldCheck },
     ],
   },
   receptionist: {
@@ -60,6 +61,7 @@ export const workspaces = {
       { label: "Patient Lookup", to: "/staff/lookup", icon: Search },
       { label: "Visit References", to: "/staff/visits", icon: FileSearch },
       { label: "Clinical records", to: "/staff/records", icon: ClipboardList },
+      { label: "Emergency access", to: "/staff/emergency", icon: ShieldCheck },
     ],
   },
   reviewer: {
@@ -102,20 +104,23 @@ export const pages = {
     eyebrow: "Hospital Admin",
     title: "Overview",
     description:
-      "Hospital administration for staff accounts, patient registration, and duplicate-match review. Nothing on this screen is loaded from the API.",
+      "Hospital administration for staff accounts, patient registration, and duplicate-match review.",
     kind: "overview",
     items: [
       {
         title: "Hospital staff directory",
         text: "Create receptionist, doctor, reviewer, and hospital staff accounts, or disable an account in this hospital.",
+        to: "/admin/staff",
       },
       {
         title: "Patient registration",
         text: "Register a patient when matching does not find a confirmed record. The clinical profile stays off-chain.",
+        to: "/admin/registration",
       },
       {
         title: "Matching and review",
         text: "Hold possible duplicate matches for a reviewer or administrator before a new registration is sent to the chain.",
+        to: "/admin/reviews",
       },
       {
         title: "Hospital boundary",
@@ -183,20 +188,23 @@ export const pages = {
     eyebrow: "Doctor",
     title: "Overview",
     description:
-      "Lookup for a confirmed patient and a place to store a visit reference. Registration and staff management stay with the hospital administrator.",
+      "Lookup, encrypted clinical entries, and emergency requests for this hospital. Sepolia broadcasts stay disabled until they are approved.",
     kind: "overview",
     items: [
       {
         title: "Patient lookup",
-        text: "Retrieve a confirmed patient by ID. The current API returns identifiers and status, not the clinical chart.",
+        text: "Retrieve a confirmed patient by ID. The response returns identifiers and status.",
+        to: "/doctor/lookup",
       },
       {
-        title: "Clinical Visit Reference",
-        text: "Store a visit reference and an optional record hash with the patient. The hash is kept off-chain with the visit.",
+        title: "Clinical records",
+        text: "Save an encrypted diagnosis, prescription, laboratory report, allergy, treatment, or visit when the connected wallet has consent.",
+        to: "/doctor/records",
       },
       {
-        title: "Outside this workspace",
-        text: "Creating a blockchain patient registration is limited to a hospital administrator.",
+        title: "Emergency access",
+        text: "Prepare a time-limited request. The reason stays off-chain, and the public transaction is not sent from this screen.",
+        to: "/doctor/emergency",
       },
     ],
   },
@@ -300,16 +308,23 @@ export const pages = {
     eyebrow: "Hospital Staff",
     title: "Overview",
     description:
-      "Hospital staff can look up a confirmed patient and store a visit reference. This role cannot register patients or manage accounts.",
+      "Lookup, visit references, and encrypted clinical entries. This role cannot register patients or manage accounts.",
     kind: "overview",
     items: [
       {
         title: "Patient lookup",
         text: "Read the patient ID, DID, and status for a confirmed patient in this hospital.",
+        to: "/staff/lookup",
       },
       {
-        title: "Clinical Visit Reference",
-        text: "Save a record reference and an optional hash against that patient. The chart itself is not stored here.",
+        title: "Clinical records",
+        text: "Save an encrypted entry when the connected wallet has consent or an active emergency grant.",
+        to: "/staff/records",
+      },
+      {
+        title: "Emergency access",
+        text: "Prepare a request for an on-chain emergency responder. Sepolia is not sent without approval.",
+        to: "/staff/emergency",
       },
     ],
   },
@@ -387,11 +402,31 @@ export const pages = {
     emptyTitle: "No match has been run",
     emptyDescription: "Run a match. A possible match becomes a review case and is not registered from this screen.",
   },
+  "doctor-emergency": {
+    eyebrow: "Doctor",
+    title: "Emergency access",
+    description:
+      "Request temporary access for a confirmed patient. The wallet must be an on-chain emergency responder, and the reason is not published.",
+    kind: "table",
+    columns: [],
+    emptyTitle: "No emergency session",
+    emptyDescription: "A session appears only after the chain reports one.",
+  },
+  "staff-emergency": {
+    eyebrow: "Hospital Staff",
+    title: "Emergency access",
+    description:
+      "Request temporary access for a confirmed patient. The chain accepts only an emergency responder, for at most 72 hours.",
+    kind: "table",
+    columns: [],
+    emptyTitle: "No emergency session",
+    emptyDescription: "A session appears only after the chain reports one.",
+  },
   patient: {
     eyebrow: "Patient",
     title: "Patient workspace",
     description:
-      "Patient sign-in uses a wallet signature. Medical records and access permissions remain awaiting integration.",
+      "Patient sign-in uses a wallet signature. Consent is granted by the controller wallet, and public networks are not sent a transaction.",
     kind: "overview",
     items: [],
   },
@@ -399,10 +434,10 @@ export const pages = {
     eyebrow: "Emergency Staff",
     title: "Emergency workspace",
     description:
-      "Backend integration pending. There is no emergency-staff role in the API. This screen does not request emergency access on-chain.",
+      "There is no separate emergency login. Signed-in doctors and hospital staff prepare a request from their own workspace.",
     kind: "pending",
-    pendingTitle: "Backend integration pending",
+    pendingTitle: "Use a clinical workspace",
     pendingMessage:
-      "Emergency login is not supported. Temporary on-chain emergency access exists in the contracts, but this interface does not call those contracts.",
+      "This page does not request emergency access and does not send a transaction. An authorized clinician prepares the request after signing in.",
   },
 };

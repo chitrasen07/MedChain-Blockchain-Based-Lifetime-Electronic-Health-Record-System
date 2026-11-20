@@ -8,8 +8,10 @@ import { Input } from "../../components/Input";
 import { LoadingSkeleton } from "../../components/LoadingSkeleton";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBadge } from "../../components/StatusBadge";
+import { VerificationNotice } from "../../components/VerificationNotice";
 import { ApiError, apiClient, messageForRequest } from "../../lib/api";
 import { claimBroadcastAllowed, sendPatientClaim } from "../../lib/claimChain";
+import { consentBroadcastAllowed, grantCalldata, revokeCalldata, sendPreparedTransaction } from "../../lib/consentChain";
 import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode, sepoliaTransactionUrl } from "../../lib/ownership";
 import { useAuth } from "../../context/useAuth";
 import { claimStatusBody, patientAuthMessage } from "../../services/patientPortal";
@@ -125,9 +127,9 @@ export function PatientDashboardPage() {
                 Open visit history
               </Link>
             </Card>
-            <Card title="Awaiting later integration">
+            <Card title="Records and consent">
               <p className="text-sm leading-6 text-muted">
-                Medical records and access permissions are not read from the chain yet. Those pages stay empty on purpose.
+                Medical records are the encrypted entries stored for this patient. Consent and emergency sessions are read from Sepolia. Public transactions are not sent from this portal.
               </p>
               <div className="mt-3 flex flex-wrap gap-4">
                 <Link className="text-sm font-medium text-teal hover:text-teal-dark" to="/patient/records">
@@ -249,6 +251,9 @@ export function PatientOwnershipPage() {
         title="Ownership"
         description="Confirm the controller wallet or prepare an unclaimed recovery locally. MedChain does not broadcast the claim."
       />
+      <VerificationNotice>
+        Announce and reveal stay in this browser until a public transaction is approved. Reveal is rejected by the contract until one hour after the announcement.
+      </VerificationNotice>
       {state.phase === "loading" ? <LoadingSkeleton label="Loading ownership" /> : null}
       {state.phase === "error" ? <ErrorState title="Ownership unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
       {state.phase === "ready" && state.data.ownership === "controller" ? (
@@ -414,23 +419,160 @@ export function PatientRecordsPage() {
   );
 }
 
+function expiryLabel(expiresAt) {
+  if (!expiresAt) return "Until revoked";
+  return new Date(Number(expiresAt) * 1000).toLocaleString();
+}
+
 export function PatientAccessPage() {
   const state = usePortalGet("/patient-portal/access");
+  const [staffWallet, setStaffWallet] = useState("");
+  const [expiresOn, setExpiresOn] = useState("");
+  const [prepared, setPrepared] = useState("");
+  const [notice, setNotice] = useState("");
+  const [chainId, setChainId] = useState(null);
+  const broadcastAllowed = consentBroadcastAllowed(chainId) && Boolean(import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
+  const permissions = state.data?.permissions || [];
+  const emergency = state.data?.emergency || [];
+  const audit = state.data?.audit || [];
+  const grantingDisabled = state.data?.grantingDisabled !== false;
+
+  useEffect(() => {
+    const ethereum = globalThis.window?.ethereum;
+    if (!ethereum?.request) return undefined;
+    let active = true;
+    ethereum.request({ method: "eth_chainId" }).then((value) => {
+      if (active) setChainId(Number(value));
+    }).catch(() => {
+      if (active) setChainId(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function prepareGrant(event) {
+    event.preventDefault();
+    setPrepared("");
+    setNotice("");
+    const patientRef = state.data?.patientRef;
+    if (grantingDisabled || !patientRef || !/^0x[0-9a-fA-F]{40}$/.test(staffWallet.trim())) {
+      setNotice("Consent can be prepared only by the controller, for a clinical wallet.");
+      return;
+    }
+    const expiresAt = expiresOn ? Math.floor(Date.parse(`${expiresOn}T23:59:59Z`) / 1000) : 0;
+    if (expiresOn && (!Number.isFinite(expiresAt) || expiresAt * 1000 <= Date.now())) {
+      setNotice("Choose an expiry in the future, or leave it empty to keep the grant until you revoke it.");
+      return;
+    }
+    const data = grantCalldata(patientRef, staffWallet.trim(), expiresAt);
+    if (!data) {
+      setNotice("The grant could not be prepared.");
+      return;
+    }
+    setPrepared(data);
+    setNotice("The grant is prepared in this browser. It is not sent on a public network.");
+  }
+
+  async function sendPrepared(data) {
+    try {
+      await sendPreparedTransaction({
+        chainId,
+        contractAddress: import.meta.env?.VITE_LOCAL_RECORD_ACCESS,
+        data,
+        ethereum: globalThis.window?.ethereum,
+      });
+      setNotice("The consent transaction was sent on the local network.");
+    } catch (error) {
+      setNotice(error?.message || "The consent transaction was not sent.");
+    }
+  }
+
   return (
     <div>
       <PortalHeader
         title="Access permissions"
         description="Consent can be granted only by the patient controller wallet. The hospital wallet cannot grant it."
-        badge={<StatusBadge tone="warning">Consent required</StatusBadge>}
+        badge={<StatusBadge tone={permissions.some((item) => item.active) ? "success" : "warning"}>{state.data?.status === "active" ? "Active" : "Consent required"}</StatusBadge>}
       />
+      <VerificationNotice>
+        Grants and revocations are prepared for the controller wallet. They are not sent to Sepolia from this page.
+      </VerificationNotice>
       {state.phase === "loading" ? <LoadingSkeleton label="Loading access permissions" /> : null}
       {state.phase === "error" ? <ErrorState title="Access permissions unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
-      {state.phase === "ready" ? (
+      {state.phase === "ready" && permissions.length === 0 ? (
         <Card>
           <EmptyState title="No access permissions" description={state.data.message} />
-          <div className="px-4 pb-8 text-center">
-            <Button type="button" disabled>Grant consent</Button>
-          </div>
+        </Card>
+      ) : null}
+      {state.phase === "ready" && permissions.length > 0 ? (
+        <Card title="Clinical wallets">
+          <ul className="space-y-4">
+            {permissions.map((permission) => {
+              const revoke = revokeCalldata(state.data.patientRef, permission.wallet);
+              return (
+                <li key={permission.wallet} className="border-b border-line pb-4 last:border-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone={permission.status === "active" ? "success" : "warning"}>{permission.status}</StatusBadge>
+                    <p className="text-sm text-ink">{permission.expiresAt ? expiryLabel(permission.expiresAt) : "Until revoked"}</p>
+                  </div>
+                  <p className="mt-1 break-all text-xs text-muted">{permission.wallet}</p>
+                  <Button className="mt-2" type="button" variant="secondary" disabled={grantingDisabled || !broadcastAllowed || !revoke || permission.status !== "active"} onClick={() => sendPrepared(revoke)}>
+                    Revoke consent
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      ) : null}
+      {state.phase === "ready" ? (
+        <Card className="mt-4" title="Grant consent">
+          <form className="max-w-lg space-y-4" onSubmit={prepareGrant}>
+            <Input label="Clinical wallet" name="staffWallet" value={staffWallet} onChange={(event) => setStaffWallet(event.target.value)} placeholder="0x" hint="The wallet that will read or anchor records." />
+            <Input label="Expiry date" name="expiresOn" type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} hint="Optional. Empty means the grant lasts until you revoke it." />
+            {notice ? <p role="status" className="text-sm leading-6 text-ink">{notice}</p> : null}
+            {prepared ? <p className="break-all text-xs leading-5 text-muted">{prepared}</p> : null}
+            <div className="flex flex-wrap gap-3">
+              <Button type="submit" disabled={grantingDisabled}>Prepare grant</Button>
+              <Button type="button" variant="secondary" disabled={grantingDisabled || !broadcastAllowed || !prepared} onClick={() => sendPrepared(prepared)}>
+                Send on local network
+              </Button>
+            </div>
+            <p className="text-xs leading-5 text-muted">The controller signs this transaction. Sepolia stays disabled, and the hospital wallet is not asked to sign.</p>
+          </form>
+        </Card>
+      ) : null}
+      {state.phase === "ready" ? (
+        <Card className="mt-4" title="Emergency sessions">
+          {emergency.length === 0 ? (
+            <EmptyState title="No emergency session" description="Active and historical emergency access appears here when the chain reports it." />
+          ) : (
+            <ul className="space-y-4">
+              {emergency.map((session) => (
+                <li key={`${session.wallet}-${session.expiresAt}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone={session.active ? "danger" : "warning"}>{session.status}</StatusBadge>
+                    <p className="text-sm text-ink">{expiryLabel(session.expiresAt)}</p>
+                  </div>
+                  <p className="mt-1 break-all text-xs text-muted">{session.wallet}</p>
+                  {session.reason ? <p className="mt-1 text-sm leading-6 text-ink">{session.reason}</p> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      ) : null}
+      {state.phase === "ready" && audit.length > 0 ? (
+        <Card className="mt-4" title="Audit history">
+          <ul className="space-y-3">
+            {audit.map((entry, index) => (
+              <li key={`${entry.action}-${entry.timestamp}-${index}`} className="text-sm leading-6 text-ink">
+                <span className="font-medium text-navy">{entry.action}</span>
+                <span className="mt-1 block break-all text-xs text-muted">{entry.actor} · {entry.source}</span>
+              </li>
+            ))}
+          </ul>
         </Card>
       ) : null}
     </div>
