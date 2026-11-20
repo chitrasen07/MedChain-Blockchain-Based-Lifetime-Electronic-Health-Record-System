@@ -54,6 +54,12 @@ export function createAdminService(client = apiClient) {
     saveAuthorization(id, body) {
       return client.request(`/admin/users/${encodeURIComponent(id)}/authorization`, { method: "POST", body });
     },
+    recordAuthorization(id, txHash) {
+      return client.request(`/admin/users/${encodeURIComponent(id)}/authorization/result`, {
+        method: "POST",
+        body: { status: "submitted", txHash },
+      });
+    },
     markAuthorizationFailed(id, txHash) {
       return client.request(`/admin/users/${encodeURIComponent(id)}/authorization/result`, {
         method: "POST",

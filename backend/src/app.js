@@ -450,11 +450,13 @@ function createApp({ db, blockchain, config }) {
   app.post("/admin/users/:id/authorization/result", admin, async (req, res, next) => {
     try {
       const input = z.object({
-        status: z.enum(["failed"]),
+        status: z.enum(["failed", "submitted"]),
         txHash: z.string().trim().regex(/^0x[0-9a-fA-F]{64}$/).optional()
       }).parse(req.body);
-      await db.markStaffAuthorization(req.params.id, req.user.hospital_id, input.status, input.txHash);
-      res.json({ status: input.status });
+      if (input.status === "submitted" && !input.txHash) return res.status(400).json({ error: "Invalid request" });
+      const stored = input.status === "submitted" ? "pending" : "failed";
+      await db.markStaffAuthorization(req.params.id, req.user.hospital_id, stored, input.txHash);
+      res.json({ status: stored });
     } catch (error) { next(error); }
   });
 
@@ -465,10 +467,10 @@ function createApp({ db, blockchain, config }) {
       if (typeof blockchain.hasChainRole !== "function") return res.status(503).json({ error: "Service unavailable" });
       const holds = async (role, wallet) => role && wallet ? Boolean(await blockchain.hasChainRole(role, wallet)) : false;
       const desiredHeld = await holds(member.chainRole, member.walletAddress);
-      const previousHeld = await holds(member.previousChainRole, member.previousWalletAddress || member.walletAddress);
-      const previousWalletHeld = member.previousWalletAddress && member.previousWalletAddress !== member.walletAddress
-        ? await holds(member.chainRole, member.previousWalletAddress)
-        : false;
+      const previousRole = member.previousChainRole && member.previousChainRole !== member.chainRole ? member.previousChainRole : "";
+      const previousWallet = member.previousWalletAddress && member.previousWalletAddress !== member.walletAddress ? member.previousWalletAddress : "";
+      const previousHeld = await holds(previousRole, previousWallet || member.walletAddress);
+      const previousWalletHeld = previousWallet ? await holds(member.chainRole, previousWallet) : false;
       const clearing = member.authorizationAction === "revoke" || member.status === "disabled" || !isClinicalRole(member.role);
       const matches = clearing ? !desiredHeld && !previousHeld : desiredHeld && !previousHeld && !previousWalletHeld;
       if (!matches) return res.json({ status: member.authorizationStatus || "pending", verified: false });

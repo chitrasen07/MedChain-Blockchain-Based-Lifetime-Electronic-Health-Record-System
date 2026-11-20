@@ -166,6 +166,7 @@ describe("clinical records and claims", () => {
         roleCalls.push({ method, params });
         if (method === "eth_chainId") return "0xaa36a7";
         if (method === "eth_requestAccounts") return ["0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F"];
+        if (method === "eth_call") return "0x1";
         if (method === "eth_sendTransaction") return `0x${"56".repeat(32)}`;
         throw new Error(method);
       },

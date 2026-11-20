@@ -69,9 +69,14 @@ export async function sendRoleTransaction({ kind = "grant", chainId, roleName, a
     throw Object.assign(new Error("Switch the wallet to Sepolia before changing a role."), { code: "broadcast_blocked" });
   }
   const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+  const sender = Array.isArray(accounts) ? accounts[0] : "";
+  const senderRole = await readChainRole(ethereum, sender);
+  if (!senderRole?.hospitalAdmin) {
+    throw Object.assign(new Error("The connected wallet is not a hospital administrator on Sepolia. Switch to the administrator account. No transaction was sent."), { code: "wrong_account" });
+  }
   return ethereum.request({
     method: "eth_sendTransaction",
-    params: [{ from: accounts[0], to: SEPOLIA_ROLE_MANAGER, data }],
+    params: [{ from: sender, to: SEPOLIA_ROLE_MANAGER, data }],
   });
 }
 

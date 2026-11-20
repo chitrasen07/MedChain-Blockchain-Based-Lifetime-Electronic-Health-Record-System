@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
@@ -21,9 +21,16 @@ import { sendRoleTransaction } from "../lib/roleChain";
 import { HOSPITAL_STAFF_CHAIN_ROLES, STAFF_CREATE_ROLES, adminService, clinicalRole, validateStaffAccount } from "../services/adminService";
 
 function requestMessage(error) {
-  return error instanceof ApiError ? messageForRequest(error) : error?.code === 4001
-    ? "MetaMask did not approve the request. Nothing was sent."
-    : error?.message || "The hospital service could not complete the request.";
+  if (error?.code === 4001) return "MetaMask rejected the transaction. No new role transaction was sent.";
+  if (error?.code === "wrong_account") return error.message;
+  if (error instanceof ApiError) return messageForRequest(error);
+  if (/network|timeout|fetch|disconnected/i.test(error?.message || "")) return "Sepolia did not respond. The authorization was not changed.";
+  if (/insufficient|permission|unauthorized/i.test(error?.message || "")) return "The connected wallet cannot assign this role. Use the hospital administrator account.";
+  return error?.message || "The hospital service could not complete the request.";
+}
+
+function reverted(status) {
+  try { return BigInt(status) === 0n; } catch { return status === "0x0"; }
 }
 
 function authorizationLabel(accountRow) {
@@ -60,16 +67,34 @@ export function StaffDirectoryScreen({ pageKey }) {
   const [roleTarget, setRoleTarget] = useState(null);
   const [nextRole, setNextRole] = useState("receptionist");
   const [nextChainRole, setNextChainRole] = useState("NURSE");
+  const chainLock = useRef(false);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
   }, [page.title]);
 
+  async function listAndSync() {
+    const result = await adminService.listUsers();
+    let list = Array.isArray(result?.users) ? result.users : [];
+    const pending = list.filter((row) => row.authorizationStatus === "pending" && row.walletAddress && row.chainRole);
+    let synced = false;
+    for (const row of pending) {
+      const verified = await adminService.verifyAuthorization(row.id);
+      if (verified?.verified) synced = true;
+    }
+    if (synced) {
+      const again = await adminService.listUsers();
+      list = Array.isArray(again?.users) ? again.users : list;
+    }
+    return { list, synced };
+  }
+
   async function load() {
     setLoadError("");
     try {
-      const result = await adminService.listUsers();
-      setUsers(Array.isArray(result?.users) ? result.users : []);
+      const { list, synced } = await listAndSync();
+      setUsers(list);
+      if (synced) setNotice("The blockchain role is already active. No new transaction was sent.");
     } catch (error) {
       setUsers([]);
       setLoadError(requestMessage(error));
@@ -78,8 +103,10 @@ export function StaffDirectoryScreen({ pageKey }) {
 
   useEffect(() => {
     let active = true;
-    adminService.listUsers().then((result) => {
-      if (active) setUsers(Array.isArray(result?.users) ? result.users : []);
+    listAndSync().then(({ list, synced }) => {
+      if (!active) return;
+      setUsers(list);
+      if (synced) setNotice("The blockchain role is already active. No new transaction was sent.");
     }).catch((error) => {
       if (!active) return;
       setUsers([]);
@@ -117,33 +144,78 @@ export function StaffDirectoryScreen({ pageKey }) {
     }
   }
 
+  async function alreadyActive(member) {
+    const verified = await adminService.verifyAuthorization(member.id);
+    if (!verified?.verified) return false;
+    setNotice("The blockchain role is already active. No new transaction was sent.");
+    return true;
+  }
+
   async function finishChainAction(member, kind, roleName, wallet) {
-    if (!window.confirm("Switch MetaMask to the hospital administrator wallet. The role transaction is sent only after you approve it there.")) return;
+    if (chainLock.current) return;
+    chainLock.current = true;
     setBusy("chain");
-    setNotice("Waiting for the hospital administrator to approve the transaction in MetaMask.");
+    setNotice("");
     try {
-      await globalThis.window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xaa36a7" }] });
+      if (await alreadyActive(member)) return;
+      const ethereum = globalThis.window?.ethereum;
+      if (!ethereum?.request) {
+        setNotice("A wallet extension is required. No transaction was sent.");
+        return;
+      }
+      if (member.authorizationTx) {
+        const existing = await ethereum.request({ method: "eth_getTransactionReceipt", params: [member.authorizationTx] });
+        if (!existing) {
+          setNotice("A role transaction is already pending on Sepolia. Wait for confirmation before sending another.");
+          return;
+        }
+      }
+      if (!window.confirm("Switch MetaMask to the hospital administrator wallet. The role transaction is sent only after you approve it there.")) {
+        setNotice("The role transaction was not sent.");
+        return;
+      }
+      const current = Number(await ethereum.request({ method: "eth_chainId" }));
+      if (current !== SEPOLIA_CHAIN_ID) {
+        await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xaa36a7" }] });
+      }
+      setNotice("Waiting for the hospital administrator to approve the transaction in MetaMask.");
       const hash = await sendRoleTransaction({
         kind,
         chainId: SEPOLIA_CHAIN_ID,
         roleName,
         account: wallet,
-        ethereum: globalThis.window.ethereum,
+        ethereum,
       });
-      const receipt = await waitForReceipt(globalThis.window.ethereum, hash);
-      if (!receipt || receipt.status === "0x0") {
+      await adminService.recordAuthorization(member.id, hash);
+      const receipt = await waitForReceipt(ethereum, hash);
+      if (!receipt) {
+        setNotice("The role transaction is still pending on Sepolia. Wait for confirmation before sending another.");
+        return;
+      }
+      if (reverted(receipt.status)) {
+        if (await alreadyActive(member)) return;
         await adminService.markAuthorizationFailed(member.id, hash);
-        setNotice("The role transaction was not confirmed.");
+        setNotice("The role transaction reverted. The hospital administrator account must approve it.");
         return;
       }
       const verified = await adminService.verifyAuthorization(member.id);
       setNotice(verified.verified
         ? "The blockchain role matches this staff account."
-        : "The transaction was confirmed, but the role is not correct yet. Retry the authorization.");
+        : "The transaction was confirmed, but the role is not correct yet. Retry after the network updates.");
     } catch (error) {
-      if (error?.code !== 4001) await adminService.markAuthorizationFailed(member.id).catch(() => {});
+      if (![4001, "wrong_account"].includes(error?.code)) {
+        const verified = await adminService.verifyAuthorization(member.id).catch(() => null);
+        if (verified?.verified) {
+          setNotice("The blockchain role is already active. No new transaction was sent.");
+          return;
+        }
+      }
+      if (error?.code !== 4001 && error?.code !== "wrong_account") {
+        await adminService.markAuthorizationFailed(member.id).catch(() => {});
+      }
       setNotice(requestMessage(error));
     } finally {
+      chainLock.current = false;
       setBusy("");
       await load();
     }
@@ -175,12 +247,21 @@ export function StaffDirectoryScreen({ pageKey }) {
   }
 
   async function retryAuthorization(accountRow) {
+    if (chainLock.current) return;
     setNotice("");
     if (!accountRow.walletAddress || !accountRow.chainRole) {
       await linkExisting(accountRow);
       return;
     }
-    await adminService.saveAuthorization(accountRow.id, { chainRole: accountRow.chainRole });
+    try {
+      if (await alreadyActive(accountRow)) {
+        await load();
+        return;
+      }
+    } catch (error) {
+      setNotice(requestMessage(error));
+      return;
+    }
     const kind = accountRow.authorizationAction === "revoke" ? "revoke" : "grant";
     await finishChainAction(accountRow, kind, accountRow.chainRole, accountRow.walletAddress);
   }

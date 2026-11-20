@@ -53,8 +53,7 @@ function appFor() {
     async hospitalSigner() { return "0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F"; },
     async hasChainRole(roleName, account) {
       calls.push(`has:${roleName}`);
-      const member = [...users.values()].find((user) => user.walletAddress === account.toLowerCase());
-      return Boolean(member && member.chainRole === roleName && member.authorizationStatus === "active");
+      return roleName === "DOCTOR" && String(account).toLowerCase() === "0xf7d8e63eb6d81c4faded4fdda7edb10d28b54bb0";
     }
   };
   return {
@@ -112,4 +111,25 @@ test("clinical onboarding requires one wallet signature and rejects chain-role e
   assert.equal(retry.status, 200);
   assert.equal(calls.filter((call) => call === "createUser").length, 1);
   assert.equal(calls.includes("saveStaffAuthorization"), true);
+});
+
+test("verify marks an already granted doctor role active without another transaction", async () => {
+  const { app, calls, users } = appFor();
+  users.set("staff-1", {
+    id: "staff-1",
+    role: "doctor",
+    status: "active",
+    walletAddress: "0xf7d8e63eb6d81c4faded4fdda7edb10d28b54bb0",
+    chainRole: "DOCTOR",
+    previousChainRole: null,
+    authorizationStatus: "pending",
+    authorizationAction: "grant"
+  });
+  const response = await request(app)
+    .post("/admin/users/staff-1/authorization/verify")
+    .set("Authorization", `Bearer ${issueToken(admin, secret)}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { status: "active", verified: true });
+  assert.equal(calls.includes("mark:active"), true);
+  assert.equal(calls.includes("createUser"), false);
 });
