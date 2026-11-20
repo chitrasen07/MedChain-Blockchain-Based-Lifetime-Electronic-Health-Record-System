@@ -99,6 +99,10 @@ function createApp({ db, blockchain, config }) {
         const review = await db.createReviewCase(profile, hashes, match.candidates, req.user.sub, req.user.hospital_id);
         return res.status(202).json({ status: "review_required", reviewCaseId: review.id, candidateCount: match.candidateCount });
       }
+      // Stop before pending patients, registration rows, and submission audits.
+      if (config.blockchainEnabled === false) {
+        return res.status(503).json({ error: "Blockchain registration is unavailable" });
+      }
       const commitment = blockchain.identityCommitment(JSON.stringify(hashes), config.identityCommitmentKey);
       const recovered = !reviewCaseId && db.getPendingRegistrationByCommitment
         ? await db.getPendingRegistrationByCommitment(commitment, req.user.hospital_id)
@@ -172,6 +176,10 @@ function createApp({ db, blockchain, config }) {
         candidatePatientId: z.string().uuid().optional(),
         notes: z.string().trim().max(1000).optional()
       }).parse(req.body);
+      // different_person moves the review patient to pending so it can be registered on-chain.
+      if (config.blockchainEnabled === false && input.decision === "different_person") {
+        return res.status(503).json({ error: "Blockchain registration is unavailable" });
+      }
       const result = await db.resolveReviewCase(req.params.id, input, req.user.sub, req.user.hospital_id);
       res.json({ status: result.status, patientId: result.linkedPatientId || undefined, registrationRequired: result.status === "resolved_different" });
     } catch (error) { next(error); }

@@ -14,16 +14,32 @@ const ROLE_ABI = [
   "function hasRole(bytes32 role,address account) view returns (bool)"
 ];
 
+function blockchainUnavailable() {
+  const error = new Error("Blockchain registration is unavailable");
+  error.statusCode = 503;
+  return error;
+}
+
+// Database-only development. No provider, wallet, or transaction is created.
+function createDisabledBlockchainAdapter() {
+  const reject = async () => { throw blockchainUnavailable(); };
+  return {
+    enabled: false,
+    identityCommitment() { throw blockchainUnavailable(); },
+    registerPatient: reject,
+    submitRegistration: reject,
+    reconcileRegistration: reject,
+    commitmentExists: reject,
+    verifySigner: reject
+  };
+}
+
 function createBlockchainAdapter(config) {
+  if (config.blockchainEnabled === false) return createDisabledBlockchainAdapter();
   const identityCommitment = (value, secret) =>
     `0x${crypto.createHmac("sha256", secret).update(String(value)).digest("hex")}`;
   if (!config.rpcUrl || !config.registryAddress || !config.privateKey) {
-    return {
-      identityCommitment,
-      async registerPatient() { throw new Error("Blockchain integration is not configured"); }
-      ,async submitRegistration() { throw new Error("Blockchain integration is not configured"); }
-      ,async reconcileRegistration() { throw new Error("Blockchain integration is not configured"); }
-    };
+    throw new Error("Blockchain integration is not configured");
   }
   const request = new FetchRequest(config.rpcUrl);
 

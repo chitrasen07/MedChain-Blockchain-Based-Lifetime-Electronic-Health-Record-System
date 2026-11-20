@@ -67,6 +67,15 @@ medical records are not sent on-chain.
    permissions. If it fails, manually verify the deployment addresses and
    assign the role through an already authorized administrator.
 
+   Set `BLOCKCHAIN_ENABLED=false` to run against PostgreSQL without a chain.
+   Startup then does not require the four blockchain variables and does not
+   create a signing wallet. Matching, staff authentication, staff management,
+   visits, and review decisions other than `different_person` stay available.
+   A new patient registration, or a `different_person` review decision, returns
+   HTTP 503 `Blockchain registration is unavailable` and writes no pending
+   registration. Omit the flag, or set it to `true`, for a normal deployment:
+   the blockchain variables are required, and a missing value stops startup.
+
 Required secrets are `JWT_SECRET`, `IDENTITY_COMMITMENT_KEY`, and
 `PII_ENCRYPTION_KEY` (64 hex characters). Do not commit `.env` files or real
 patient data. Rotate identity and encryption keys through an approved key
