@@ -25,6 +25,7 @@ export const workspaces = {
       { label: "Patient Matching", to: "/admin/matching", icon: GitCompare },
       { label: "Review Cases", to: "/admin/reviews", icon: ClipboardList },
       { label: "Staff Management", to: "/admin/staff", icon: Users },
+      { label: "Change password", to: "/admin/password", icon: KeyRound },
     ],
   },
   doctor: {
@@ -38,6 +39,7 @@ export const workspaces = {
       { label: "Visit References", to: "/doctor/visits", icon: FileSearch },
       { label: "Clinical records", to: "/doctor/records", icon: ClipboardList },
       { label: "Emergency access", to: "/doctor/emergency", icon: ShieldCheck },
+      { label: "Change password", to: "/doctor/password", icon: KeyRound },
     ],
   },
   receptionist: {
@@ -49,6 +51,7 @@ export const workspaces = {
       { label: "Overview", to: "/receptionist", end: true, icon: LayoutDashboard },
       { label: "Patient Matching", to: "/receptionist/matching", icon: GitCompare },
       { label: "Patient Lookup", to: "/receptionist/lookup", icon: Search },
+      { label: "Change password", to: "/receptionist/password", icon: KeyRound },
     ],
   },
   staff: {
@@ -62,6 +65,7 @@ export const workspaces = {
       { label: "Visit References", to: "/staff/visits", icon: FileSearch },
       { label: "Clinical records", to: "/staff/records", icon: ClipboardList },
       { label: "Emergency access", to: "/staff/emergency", icon: ShieldCheck },
+      { label: "Change password", to: "/staff/password", icon: KeyRound },
     ],
   },
   reviewer: {
@@ -73,6 +77,7 @@ export const workspaces = {
       { label: "Overview", to: "/reviewer", end: true, icon: LayoutDashboard },
       { label: "Review Queue", to: "/reviewer/queue", icon: ClipboardList },
       { label: "Patient Matching", to: "/reviewer/matching", icon: GitCompare },
+      { label: "Change password", to: "/reviewer/password", icon: KeyRound },
     ],
   },
   patient: {

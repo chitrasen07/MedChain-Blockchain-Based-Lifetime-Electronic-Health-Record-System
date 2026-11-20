@@ -37,16 +37,37 @@ function createDb(config) {
     },
     identityHashes,
     async authenticateUser(email, password) {
-      const result = await query("SELECT id,email,password_hash,role,hospital_id,status FROM users WHERE email=$1", [email.toLowerCase()]);
+      const result = await query("SELECT id,email,password_hash,role,hospital_id,status,token_version FROM users WHERE email=$1", [email.toLowerCase()]);
       const user = result.rows[0];
       return user && user.status === "active" && verifyPassword(password, user.password_hash) ? user : null;
     },
     async getUserForAuth(id) {
       const result = await query(
-        "SELECT id,role,hospital_id,status FROM users WHERE id=$1 AND status='active' AND EXISTS (SELECT 1 FROM hospitals h WHERE h.id=users.hospital_id AND h.status='active')",
+        "SELECT id,role,hospital_id,status,token_version FROM users WHERE id=$1 AND status='active' AND EXISTS (SELECT 1 FROM hospitals h WHERE h.id=users.hospital_id AND h.status='active')",
         [id]
       );
       return result.rows[0] || null;
+    },
+    async changePassword(userId, currentPassword, newPassword) {
+      return transaction(async (client) => {
+        const existing = await client.query(
+          "SELECT password_hash FROM users WHERE id=$1 AND status='active'",
+          [userId]
+        );
+        const row = existing.rows[0];
+        if (!row || !verifyPassword(currentPassword, row.password_hash)) {
+          throw Object.assign(new Error("The current password was not accepted."), { statusCode: 400 });
+        }
+        if (verifyPassword(newPassword, row.password_hash)) {
+          throw Object.assign(new Error("Choose a password that is different from the current password."), { statusCode: 400 });
+        }
+        const updated = await client.query(
+          "UPDATE users SET password_hash=$1, token_version=token_version+1 WHERE id=$2 AND status='active' AND password_hash=$3 RETURNING id",
+          [hashPassword(newPassword), userId, row.password_hash]
+        );
+        if (!updated.rowCount) throw Object.assign(new Error("The current password was not accepted."), { statusCode: 400 });
+        return { id: updated.rows[0].id };
+      });
     },
     async countUsers() {
       const result = await query("SELECT count(*)::int AS count FROM users");

@@ -73,10 +73,10 @@ export function AuthProvider({ children }) {
         setUser(session);
         return session;
       },
-      logout() {
+      logout(notice = SIGNED_OUT_NOTICE) {
         apiClient.setAccessToken(null);
         setUser(null);
-        setNotice(SIGNED_OUT_NOTICE);
+        setNotice(typeof notice === "string" && notice ? notice : SIGNED_OUT_NOTICE);
       },
     }),
     [user, notice],

@@ -3,7 +3,11 @@ const jwt = require("jsonwebtoken");
 const PATIENT_AUDIENCE = "medchain-patient";
 
 function issueToken(user, secret) {
-  return jwt.sign({ sub: user.id, role: user.role, hospitalId: user.hospital_id }, secret, { expiresIn: "15m" });
+  return jwt.sign(
+    { sub: user.id, role: user.role, hospitalId: user.hospital_id, tv: Number.isInteger(user.token_version) ? user.token_version : 0 },
+    secret,
+    { expiresIn: "15m" }
+  );
 }
 
 function issuePatientToken(patient, walletAddress, secret) {
@@ -31,7 +35,9 @@ function requireAuth(secret, roles = [], { loadUser } = {}) {
       }
       if (!loadUser) return res.status(503).json({ error: "Authentication unavailable" });
       Promise.resolve(loadUser(claims.sub)).then((user) => {
-        if (!user || user.status !== "active") return res.status(401).json({ error: "Authentication required" });
+        const tokenVersion = Number.isInteger(claims.tv) ? claims.tv : 0;
+        const currentVersion = user && Number.isInteger(user.token_version) ? user.token_version : 0;
+        if (!user || user.status !== "active" || tokenVersion !== currentVersion) return res.status(401).json({ error: "Authentication required" });
         if (roles.length && !roles.includes(user.role)) return res.status(403).json({ error: "Insufficient permissions" });
         req.user = { ...user, sub: user.id };
         next();

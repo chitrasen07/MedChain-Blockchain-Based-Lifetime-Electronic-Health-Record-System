@@ -12,6 +12,7 @@ import {
 } from "./pages/admin/AdminPages";
 import { DoctorEmergencyPage, DoctorLookupPage, DoctorOverviewPage, DoctorRecordsPage, DoctorVisitsPage } from "./pages/doctor/DoctorPages";
 import { EmergencyDashboardPage } from "./pages/emergency/EmergencyDashboardPage";
+import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PatientLoginPage } from "./pages/patient/PatientLoginPage";
@@ -51,6 +52,7 @@ export default function App() {
             <Route path="/admin/matching" element={<AdminMatchingPage />} />
             <Route path="/admin/reviews" element={<AdminReviewsPage />} />
             <Route path="/admin/staff" element={<AdminStaffPage />} />
+            <Route path="/admin/password" element={<ChangePasswordPage />} />
           </Route>
         </Route>
 
@@ -61,6 +63,7 @@ export default function App() {
             <Route path="/doctor/visits" element={<DoctorVisitsPage />} />
             <Route path="/doctor/records" element={<DoctorRecordsPage />} />
             <Route path="/doctor/emergency" element={<DoctorEmergencyPage />} />
+            <Route path="/doctor/password" element={<ChangePasswordPage />} />
           </Route>
         </Route>
 
@@ -69,6 +72,7 @@ export default function App() {
             <Route path="/receptionist" element={<ReceptionistOverviewPage />} />
             <Route path="/receptionist/matching" element={<ReceptionistMatchingPage />} />
             <Route path="/receptionist/lookup" element={<ReceptionistLookupPage />} />
+            <Route path="/receptionist/password" element={<ChangePasswordPage />} />
           </Route>
         </Route>
 
@@ -79,6 +83,7 @@ export default function App() {
             <Route path="/staff/visits" element={<StaffVisitsPage />} />
             <Route path="/staff/records" element={<StaffRecordsPage />} />
             <Route path="/staff/emergency" element={<StaffEmergencyPage />} />
+            <Route path="/staff/password" element={<ChangePasswordPage />} />
           </Route>
         </Route>
 
@@ -87,6 +92,7 @@ export default function App() {
             <Route path="/reviewer" element={<ReviewerOverviewPage />} />
             <Route path="/reviewer/queue" element={<ReviewerQueuePage />} />
             <Route path="/reviewer/matching" element={<ReviewerMatchingPage />} />
+            <Route path="/reviewer/password" element={<ChangePasswordPage />} />
           </Route>
         </Route>
 

@@ -34,6 +34,7 @@ test("migration files are ordered and versioned by filename", async () => {
     "005_failed_registration_status.sql",
     "006_patient_auth_challenges.sql",
     "007_medical_records.sql",
-    "008_access_audit.sql"
+    "008_access_audit.sql",
+    "009_password_session.sql"
   ]);
 });

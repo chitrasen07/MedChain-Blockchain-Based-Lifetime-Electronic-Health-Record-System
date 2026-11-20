@@ -8,6 +8,7 @@ const { encryptJson, decryptJson, fieldHash } = require("./crypto");
 const { issueToken, requireAuth } = require("./auth");
 const { registerPatientAuth } = require("./patientAuth");
 const { registerClinicalRecords } = require("./clinicalRecords");
+const { passwordChangeMessage } = require("./passwordChange");
 
 const profileSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -56,6 +57,12 @@ function createApp({ db, blockchain, config }) {
   app.use(express.json({ limit: "32kb" }));
   app.use(rateLimit({ windowMs: 60_000, limit: 100, standardHeaders: true }));
   const authRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: true });
+  const passwordRateLimit = rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 5,
+    standardHeaders: true,
+    message: { error: "Too many password changes. Wait and try again." }
+  });
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
   app.get("/ready", async (_req, res, next) => {
@@ -104,6 +111,17 @@ function createApp({ db, blockchain, config }) {
     ["reviewer", "administrator"],
     { loadUser: db.getUserForAuth }
   );
+
+  app.post("/auth/password", passwordRateLimit, staff, async (req, res, next) => {
+    try {
+      const currentPassword = req.body?.currentPassword;
+      const newPassword = req.body?.newPassword;
+      const message = passwordChangeMessage(currentPassword, newPassword);
+      if (message) return res.status(400).json({ error: message });
+      await db.changePassword(req.user.sub, currentPassword, newPassword);
+      res.json({ status: "password_updated" });
+    } catch (error) { next(error); }
+  });
 
   app.post("/patients/match", staff, async (req, res, next) => {
     try {

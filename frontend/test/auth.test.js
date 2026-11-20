@@ -49,6 +49,12 @@ describe("staff session", () => {
     assert.equal(pathAllowedForRole("doctor", "/admin"), false);
     assert.equal(pathAllowedForRole("doctor", "/administration"), false);
     assert.equal(pathAllowedForRole("administrator", "/admin/staff"), true);
+    assert.equal(pathAllowedForRole("administrator", "/admin/password"), true);
+    assert.equal(pathAllowedForRole("doctor", "/doctor/password"), true);
+    assert.equal(pathAllowedForRole("receptionist", "/receptionist/password"), true);
+    assert.equal(pathAllowedForRole("hospital_staff", "/staff/password"), true);
+    assert.equal(pathAllowedForRole("reviewer", "/reviewer/password"), true);
+    assert.equal(pathAllowedForRole("doctor", "/admin/password"), false);
   });
 });
 

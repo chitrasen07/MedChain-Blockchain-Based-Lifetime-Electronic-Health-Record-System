@@ -48,6 +48,10 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "This wallet is not an emergency responder.",
   "Emergency access is in cooldown.",
   "Clinical wallet could not be verified.",
+  "The current password was not accepted.",
+  "Choose a password that is different from the current password.",
+  "Use at least 12 characters with a letter and a number.",
+  "Too many password changes. Wait and try again.",
 ]);
 
 function errorForStatus(status, serverMessage) {
@@ -72,7 +76,10 @@ function errorForStatus(status, serverMessage) {
       : "That action conflicts with the current record.";
     return new ApiError(message, { status, code: "conflict" });
   }
-  if (status === 429) return new ApiError(FAILURE_MESSAGES.rate_limited, { status, code: "rate_limited" });
+  if (status === 429) {
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage) ? serverMessage : FAILURE_MESSAGES.rate_limited;
+    return new ApiError(message, { status, code: "rate_limited" });
+  }
   if (status === 503) return new ApiError(FAILURE_MESSAGES.unavailable, { status, code: "unavailable" });
   return new ApiError(FAILURE_MESSAGES.server, { status, code: "server" });
 }
@@ -150,6 +157,12 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       onUnauthorized = typeof handler === "function" ? handler : null;
     },
     request,
+    async changePassword({ currentPassword, newPassword }) {
+      return request("/auth/password", {
+        method: "POST",
+        body: { currentPassword, newPassword },
+      });
+    },
     async login(email, password) {
       const payload = await request("/auth/token", {
         method: "POST",
