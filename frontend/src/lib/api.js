@@ -32,12 +32,23 @@ function resolveBase(baseUrl) {
   return trimmed;
 }
 
-function errorForStatus(status) {
+const PUBLIC_CONFLICT_MESSAGES = new Set([
+  "A staff account with this email already exists.",
+  "Registration attempt is no longer retryable",
+  "Registration review is not ready",
+]);
+
+function errorForStatus(status, serverMessage) {
   if (status === 401) return new ApiError(FAILURE_MESSAGES.unauthorized, { status, code: "unauthorized" });
   if (status === 403) return new ApiError(FAILURE_MESSAGES.forbidden, { status, code: "forbidden" });
   if (status === 400) return new ApiError(FAILURE_MESSAGES.invalid, { status, code: "invalid" });
   if (status === 404) return new ApiError("The requested record was not found.", { status, code: "not_found" });
-  if (status === 409) return new ApiError("That action conflicts with the current record.", { status, code: "conflict" });
+  if (status === 409) {
+    const message = PUBLIC_CONFLICT_MESSAGES.has(serverMessage)
+      ? serverMessage
+      : "That action conflicts with the current record.";
+    return new ApiError(message, { status, code: "conflict" });
+  }
   if (status === 429) return new ApiError(FAILURE_MESSAGES.rate_limited, { status, code: "rate_limited" });
   if (status === 503) return new ApiError(FAILURE_MESSAGES.unavailable, { status, code: "unavailable" });
   return new ApiError(FAILURE_MESSAGES.server, { status, code: "server" });
@@ -57,6 +68,7 @@ const REQUEST_MESSAGES = {
 };
 
 export function messageForRequest(error) {
+  if (error?.code === "conflict" && PUBLIC_CONFLICT_MESSAGES.has(error.message)) return error.message;
   return REQUEST_MESSAGES[error?.code] ?? REQUEST_MESSAGES.server;
 }
 
@@ -96,7 +108,8 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
 
     if (!response.ok) {
       if (response.status === 401 && authenticated) onUnauthorized?.();
-      const error = errorForStatus(response.status);
+      const serverMessage = payload && typeof payload.error === "string" ? payload.error : "";
+      const error = errorForStatus(response.status, serverMessage);
       if (payload && payload.status === "registration_failed") error.resultStatus = payload.status;
       throw error;
     }

@@ -88,6 +88,32 @@ describe("patient and visit requests", () => {
     });
   });
 
+  it("shows a duplicate staff email and hides unexpected conflict text", async () => {
+    const admin = createAdminService(client(async () => ({
+      ok: false,
+      status: 409,
+      text: async () => JSON.stringify({ error: "A staff account with this email already exists." }),
+    })));
+    await assert.rejects(
+      admin.createUser({ email: "doctor@example.test", password: "synthetic-password", role: "doctor" }),
+      (error) => {
+        assert.equal(messageForRequest(error), "A staff account with this email already exists.");
+        return true;
+      }
+    );
+
+    const visits = createVisitService(client(async () => ({
+      ok: false,
+      status: 409,
+      text: async () => JSON.stringify({ error: "Key (email)=(secret@example.test) already exists." }),
+    })));
+    await assert.rejects(visits.create("PATIENT-000001", { recordReference: "ref" }), (error) => {
+      assert.equal(messageForRequest(error), "That action conflicts with the current record.");
+      assert.equal(String(error.message).includes("secret@example.test"), false);
+      return true;
+    });
+  });
+
   it("disables an account with an authenticated POST and no body", async () => {
     let seen;
     const admin = createAdminService(client(async (url, options) => {

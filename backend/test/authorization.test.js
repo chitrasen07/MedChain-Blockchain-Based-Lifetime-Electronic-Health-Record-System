@@ -159,3 +159,114 @@ test("authenticated writes record the database user id as the actor", async () =
   assert.equal(calls.every((call) => call.actorId && call.actorId === users.find((user) => user.id === call.actorId).id), true);
   assert.equal(users.some((user) => Object.hasOwn(user, "sub")), false);
 });
+
+test("duplicate staff email returns 409 without the database detail", async () => {
+  const user = { id: "admin", role: "administrator", hospital_id: "hospital-a", status: "active" };
+  const db = {
+    async getUserForAuth(id) {
+      return id === user.id ? user : null;
+    },
+    async createUser() {
+      const error = new Error('duplicate key value violates unique constraint "users_email_key"');
+      error.code = "23505";
+      error.constraint = "users_email_key";
+      error.detail = "Key (email)=(doctor@example.test) already exists.";
+      throw error;
+    }
+  };
+  const app = createApp({ db, blockchain: {}, config });
+  const response = await request(app)
+    .post("/admin/users")
+    .set("Authorization", `Bearer ${token(user)}`)
+    .send({ email: "doctor@example.test", password: "synthetic-password", role: "doctor" });
+  assert.equal(response.status, 409);
+  assert.deepEqual(response.body, { error: "A staff account with this email already exists." });
+  assert.equal(JSON.stringify(response.body).includes("doctor@example.test"), false);
+  assert.equal(JSON.stringify(response.body).includes("users_email_key"), false);
+});
+
+test("a different unique violation stays an internal error", async () => {
+  const user = { id: "admin", role: "administrator", hospital_id: "hospital-a", status: "active" };
+  const db = {
+    async getUserForAuth(id) {
+      return id === user.id ? user : null;
+    },
+    async createUser() {
+      const error = new Error('duplicate key value violates unique constraint "patients_patient_id_key"');
+      error.code = "23505";
+      error.constraint = "patients_patient_id_key";
+      error.detail = "Key (patient_id)=(PATIENT-000001) already exists.";
+      throw error;
+    }
+  };
+  const app = createApp({ db, blockchain: {}, config });
+  const response = await request(app)
+    .post("/admin/users")
+    .set("Authorization", `Bearer ${token(user)}`)
+    .send({ email: "doctor@example.test", password: "synthetic-password", role: "doctor" });
+  assert.equal(response.status, 500);
+  assert.deepEqual(response.body, { error: "Internal server error" });
+  assert.equal(JSON.stringify(response.body).includes("PATIENT-000001"), false);
+});
+
+test("intentional registration conflicts stay HTTP 409", async () => {
+  const user = { id: "admin", role: "administrator", hospital_id: "hospital-a", status: "active" };
+  const reviewId = "11111111-1111-4111-8111-111111111111";
+  const db = {
+    async getUserForAuth() {
+      return user;
+    },
+    identityHashes() {
+      return [["fullName", "hash"]];
+    },
+    async matchPatient() {
+      return { status: "no_match", candidateCount: 0, candidates: [] };
+    },
+    async getPendingRegistrationByCommitment() {
+      return null;
+    },
+    async createPendingPatient() {
+      return { id: "patient-row" };
+    },
+    async beginRegistration() {
+      return { id: "reg-1", status: "submitting", claimed: true };
+    },
+    async markRegistrationSubmitted() {
+      throw Object.assign(new Error("Registration attempt is no longer retryable"), { statusCode: 409 });
+    },
+    async getReviewRegistration() {
+      throw Object.assign(new Error("Registration review is not ready"), { statusCode: 409 });
+    }
+  };
+  const blockchain = {
+    identityCommitment() {
+      return `0x${"ab".repeat(32)}`;
+    },
+    async submitRegistration() {
+      return { txHash: `0x${"cd".repeat(32)}` };
+    }
+  };
+  const app = createApp({
+    db,
+    blockchain,
+    config: {
+      ...config,
+      blockchainEnabled: true,
+      identityCommitmentKey: "synthetic",
+      controllerAddress: "0x0000000000000000000000000000000000000001"
+    }
+  });
+  const retry = await request(app)
+    .post("/patients")
+    .set("Authorization", `Bearer ${token(user)}`)
+    .send({ fullName: "Synthetic Patient", dateOfBirth: "1990-01-01" });
+  assert.equal(retry.status, 409);
+  assert.deepEqual(retry.body, { error: "Registration attempt is no longer retryable" });
+
+  const review = await request(app)
+    .post("/patients")
+    .set("Authorization", `Bearer ${token(user)}`)
+    .send({ fullName: "Synthetic Patient", dateOfBirth: "1990-01-01", reviewCaseId: reviewId });
+  assert.equal(review.status, 409);
+  assert.deepEqual(review.body, { error: "Registration review is not ready" });
+});

@@ -224,9 +224,12 @@ function createApp({ db, blockchain, config }) {
 
   app.use((error, _req, res, _next) => {
     if (error.name === "ZodError") return res.status(400).json({ error: "Invalid request" });
-    console.error("request failed", error.message);
-    const publicStatus = [401, 403, 404].includes(error.statusCode) ? error.statusCode : error.statusCode === 503 ? 503 : 500;
-    const publicMessage = publicStatus === 503 ? "Service unavailable" : publicStatus === 500 ? "Internal server error" : error.message;
+    const publicError = error.code === "23505" && error.constraint === "users_email_key"
+      ? Object.assign(new Error("A staff account with this email already exists."), { statusCode: 409 })
+      : error;
+    console.error("request failed", publicError.message);
+    const publicStatus = [401, 403, 404, 409].includes(publicError.statusCode) ? publicError.statusCode : publicError.statusCode === 503 ? 503 : 500;
+    const publicMessage = publicStatus === 503 ? "Service unavailable" : publicStatus === 500 ? "Internal server error" : publicError.message;
     res.status(publicStatus).json({ error: publicMessage });
   });
   return app;
