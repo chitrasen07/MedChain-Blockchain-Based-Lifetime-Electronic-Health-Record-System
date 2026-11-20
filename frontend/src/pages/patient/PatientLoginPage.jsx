@@ -41,7 +41,6 @@ export function PatientLoginPage() {
   async function handleSignIn(event) {
     event.preventDefault();
     setNotice("");
-    setClaimNotice("");
     const id = patientId.trim().toUpperCase();
     if (!patientIdPattern.test(id)) {
       setNotice("Enter a lifetime patient ID such as PATIENT-000001.");
