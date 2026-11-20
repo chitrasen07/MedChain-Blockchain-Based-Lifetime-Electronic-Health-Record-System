@@ -51,6 +51,9 @@ function harness(overrides = {}) {
         publicPatientId: patient.patientId
       };
     },
+    async listMedicalRecordsForPatient() {
+      return [];
+    },
     async listPatientVisits(id) {
       calls.push(["visits", id]);
       return state.visits.filter((visit) => visit.patientId === id);
@@ -215,14 +218,12 @@ test("patient and staff tokens stay on their own routes", async () => {
   assert.equal(lookup.status, 401);
   assert.equal(anonymous.status, 401);
   assert.deepEqual(visits.body.visits.map((visit) => visit.recordReference), ["visit-a-ref"]);
-  assert.equal(visits.body.medicalRecordRegistry, "awaiting_integration");
-  assert.deepEqual(records.body, {
-    status: "awaiting_integration",
-    records: [],
-    message: "The medical-record registry is not called by the API yet. No record is invented here."
-  });
+  assert.equal(visits.body.medicalRecordRegistry, "consent_required");
+  assert.deepEqual(records.body.records, []);
+  assert.equal(records.body.anchoring, "disabled");
   assert.deepEqual(access.body.permissions, []);
-  assert.equal(access.body.status, "awaiting_integration");
+  assert.equal(access.body.grantingDisabled, true);
+  assert.equal(access.body.status, "consent_required");
 });
 
 test("a recovery commitment can be checked without a secret, a token, or a transaction", async () => {

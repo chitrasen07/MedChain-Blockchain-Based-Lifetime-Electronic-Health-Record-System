@@ -9,6 +9,7 @@ import { LoadingSkeleton } from "../../components/LoadingSkeleton";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBadge } from "../../components/StatusBadge";
 import { ApiError, apiClient, messageForRequest } from "../../lib/api";
+import { claimBroadcastAllowed, sendPatientClaim } from "../../lib/claimChain";
 import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode, sepoliaTransactionUrl } from "../../lib/ownership";
 import { useAuth } from "../../context/useAuth";
 import { claimStatusBody, patientAuthMessage } from "../../services/patientPortal";
@@ -170,6 +171,22 @@ export function PatientOwnershipPage() {
   const [notice, setNotice] = useState("");
   const [sealedClaim, setSealedClaim] = useState("");
   const [checking, setChecking] = useState(false);
+  const [chainId, setChainId] = useState(null);
+  const broadcastAllowed = claimBroadcastAllowed(chainId);
+
+  useEffect(() => {
+    const ethereum = globalThis.window?.ethereum;
+    if (!ethereum?.request) return undefined;
+    let active = true;
+    ethereum.request({ method: "eth_chainId" }).then((value) => {
+      if (active) setChainId(Number(value));
+    }).catch(() => {
+      if (active) setChainId(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleClaimCheck(event) {
     event.preventDefault();
@@ -201,6 +218,28 @@ export function PatientOwnershipPage() {
       setNotice(patientAuthMessage(error instanceof ApiError ? error : error));
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function broadcastClaim(kind) {
+    const code = recoveryCode.trim();
+    const patientRef = state.data?.patientRef;
+    const value = kind === "announce" ? sealedClaim : code;
+    try {
+      await sendPatientClaim({
+        kind,
+        patientRef,
+        value,
+        registryAddress: import.meta.env?.VITE_LOCAL_PATIENT_REGISTRY,
+        chainId,
+        ethereum: globalThis.window?.ethereum,
+      });
+      setNotice(kind === "announce"
+        ? "The announcement was sent on the local network. Wait one hour before reveal."
+        : "The reveal was sent on the local network.");
+      if (kind === "reveal") setRecoveryCode("");
+    } catch (error) {
+      setNotice(error?.message || "The claim was not sent.");
     }
   }
 
@@ -242,6 +281,19 @@ export function PatientOwnershipPage() {
             <Button type="submit" loading={checking} disabled={checking}>
               Check recovery code
             </Button>
+            <div className="flex flex-wrap gap-3">
+              <Button type="button" variant="secondary" disabled={!broadcastAllowed || !sealedClaim} onClick={() => broadcastClaim("announce")}>
+                Announce claim
+              </Button>
+              <Button type="button" variant="secondary" disabled={!broadcastAllowed || !recoveryCode.trim()} onClick={() => broadcastClaim("reveal")}>
+                Reveal claim
+              </Button>
+            </div>
+            <p className="text-xs leading-5 text-muted">
+              The contract rejects a reveal until one hour after the announcement. Public networks stay disabled, so
+              these actions are not sent to Sepolia. A reveal includes the recovery secret only in a local transaction,
+              never in a hospital request.
+            </p>
           </form>
         </Card>
       ) : null}
@@ -249,37 +301,70 @@ export function PatientOwnershipPage() {
   );
 }
 
+function timelineEntries(records, visits) {
+  return [
+    ...(records || []).map((record) => ({
+      id: `record-${record.id}`,
+      at: record.recordedOn || "",
+      title: record.category,
+      detail: Object.entries(record.content || {}).filter(([key]) => key !== "category" && key !== "recordedOn").map(([, value]) => value).join(" · "),
+      hash: record.contentHash,
+      transaction: record.transaction,
+      status: "Consent required",
+    })),
+    ...(visits || []).map((visit) => ({
+      id: `visit-${visit.id}`,
+      at: visit.createdAt || "",
+      title: "Visit reference",
+      detail: visit.recordReference,
+      hash: visit.recordHash,
+      transaction: null,
+      status: "Off-chain reference",
+    })),
+  ].sort((left, right) => String(left.at).localeCompare(String(right.at)));
+}
+
 export function PatientHistoryPage() {
-  const state = usePortalGet("/patient-portal/visits");
-  const visits = state.data?.visits || [];
+  const visitsState = usePortalGet("/patient-portal/visits");
+  const recordsState = usePortalGet("/patient-portal/records");
+  const loading = visitsState.phase === "loading" || recordsState.phase === "loading";
+  const failed = visitsState.phase === "error" ? visitsState : recordsState.phase === "error" ? recordsState : null;
+  const entries = timelineEntries(recordsState.data?.records, visitsState.data?.visits);
   return (
     <div>
       <PortalHeader
         title="Visit history"
-        description="Visit references already stored for this patient. This is not the clinical chart, and chain records are not loaded."
-        badge={<StatusBadge tone="warning">Chart not stored</StatusBadge>}
+        description="Clinical entries and visit references for this patient, in date order. Hashes stay unanchored until the patient controller grants consent."
+        badge={<StatusBadge tone="warning">Not anchored</StatusBadge>}
       />
-      {state.phase === "loading" ? <LoadingSkeleton label="Loading visit history" /> : null}
-      {state.phase === "error" ? <ErrorState title="Visit history unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
-      {state.phase === "ready" && visits.length === 0 ? (
+      {loading ? <LoadingSkeleton label="Loading visit history" /> : null}
+      {failed ? (
+        <ErrorState title="Visit history unavailable" message={failed.message} action={<Button onClick={failed.retry}>Try again</Button>} />
+      ) : null}
+      {!loading && !failed && entries.length === 0 ? (
         <Card>
-          <EmptyState
-            title="No visit references"
-            description="No visit reference is stored for this patient. A clinical timeline is not invented here."
-          />
+          <EmptyState title="No history yet" description="No clinical entry or visit reference is stored for this patient." />
         </Card>
       ) : null}
-      {state.phase === "ready" && visits.length > 0 ? (
-        <Card title="Stored visit references">
+      {!loading && !failed && entries.length > 0 ? (
+        <Card title="Timeline">
           <ol className="space-y-5 border-l border-line pl-5">
-            {visits.map((visit) => (
-              <li key={visit.id} className="relative">
-                <span className="absolute top-1.5 -left-[1.45rem] h-2.5 w-2.5 rounded-full bg-teal" aria-hidden="true" />
-                <p className="text-sm font-medium text-navy">{visit.recordReference}</p>
-                <p className="mt-1 text-xs text-muted">{visit.createdAt ? new Date(visit.createdAt).toLocaleString() : "Time unavailable"}</p>
-                {visit.recordHash ? <p className="mt-1 break-all text-xs text-muted">{visit.recordHash}</p> : null}
-              </li>
-            ))}
+            {entries.map((entry) => {
+              const explorer = sepoliaTransactionUrl(entry.transaction);
+              return (
+                <li key={entry.id} className="relative">
+                  <span className="absolute top-1.5 -left-[1.45rem] h-2.5 w-2.5 rounded-full bg-teal" aria-hidden="true" />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium text-navy capitalize">{entry.title}</p>
+                    <StatusBadge tone="warning">{entry.status}</StatusBadge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{entry.at ? new Date(entry.at).toLocaleString() : "Time unavailable"}</p>
+                  {entry.detail ? <p className="mt-2 text-sm leading-6 text-ink">{entry.detail}</p> : null}
+                  {entry.hash ? <p className="mt-1 break-all text-xs text-muted">{entry.hash}</p> : null}
+                  {explorer ? <a className="mt-1 inline-flex break-all text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{entry.transaction}</a> : null}
+                </li>
+              );
+            })}
           </ol>
         </Card>
       ) : null}
@@ -289,18 +374,40 @@ export function PatientHistoryPage() {
 
 export function PatientRecordsPage() {
   const state = usePortalGet("/patient-portal/records");
+  const records = state.data?.records || [];
   return (
     <div>
       <PortalHeader
         title="Medical records"
-        description="On-chain medical record hashes are not read by the API yet."
-        badge={<StatusBadge tone="warning">Awaiting integration</StatusBadge>}
+        description="Encrypted clinical entries for this patient. Verification on Sepolia is not submitted by the hospital wallet."
+        badge={<StatusBadge tone="warning">Consent required</StatusBadge>}
       />
       {state.phase === "loading" ? <LoadingSkeleton label="Loading medical records" /> : null}
       {state.phase === "error" ? <ErrorState title="Medical records unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
-      {state.phase === "ready" ? (
+      {state.phase === "ready" && records.length === 0 ? (
         <Card>
           <EmptyState title="No medical records" description={state.data.message} />
+        </Card>
+      ) : null}
+      {state.phase === "ready" && records.length > 0 ? (
+        <Card title="Stored records">
+          <ol className="space-y-5">
+            {records.map((record) => {
+              const explorer = sepoliaTransactionUrl(record.transaction);
+              return (
+                <li key={record.id} className="border-b border-line pb-4 last:border-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium capitalize text-navy">{record.category}</p>
+                    <StatusBadge tone="warning">Not anchored</StatusBadge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{record.recordedOn} · version {record.versionIndex}</p>
+                  <p className="mt-2 text-sm leading-6 text-ink">{Object.entries(record.content || {}).filter(([key]) => key !== "category" && key !== "recordedOn").map(([, value]) => value).join(" · ")}</p>
+                  <p className="mt-1 break-all text-xs text-muted">{record.contentHash}</p>
+                  {explorer ? <a className="text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : <p className="text-xs text-muted">No transaction reference.</p>}
+                </li>
+              );
+            })}
+          </ol>
         </Card>
       ) : null}
     </div>
@@ -313,14 +420,17 @@ export function PatientAccessPage() {
     <div>
       <PortalHeader
         title="Access permissions"
-        description="Consent grants are not read from the chain yet."
-        badge={<StatusBadge tone="warning">Awaiting integration</StatusBadge>}
+        description="Consent can be granted only by the patient controller wallet. The hospital wallet cannot grant it."
+        badge={<StatusBadge tone="warning">Consent required</StatusBadge>}
       />
       {state.phase === "loading" ? <LoadingSkeleton label="Loading access permissions" /> : null}
       {state.phase === "error" ? <ErrorState title="Access permissions unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
       {state.phase === "ready" ? (
         <Card>
           <EmptyState title="No access permissions" description={state.data.message} />
+          <div className="px-4 pb-8 text-center">
+            <Button type="button" disabled>Grant consent</Button>
+          </div>
         </Card>
       ) : null}
     </div>

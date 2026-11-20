@@ -297,6 +297,39 @@ function createDb(config) {
       );
       return result.rows[0] || null;
     },
+    async createMedicalRecord(input) {
+      const result = await query(
+        "INSERT INTO medical_records (patient_id,hospital_id,category,version_index,prior_record_id,record_ref,content_ciphertext,content_hash,recorded_on,chain_status,created_by) SELECT id,$2,$3,$4,$5,$6,$7,$8,$9,'consent_required',$10 FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed' RETURNING id,category,version_index AS \"versionIndex\",prior_record_id AS \"priorRecordId\",record_ref AS \"recordRef\",content_hash AS \"contentHash\",recorded_on AS \"recordedOn\",chain_status AS \"chainStatus\",tx_hash AS \"txHash\"",
+        [input.publicPatientId, input.hospitalId, input.category, input.versionIndex, input.priorRecordId, input.recordRef, input.contentCiphertext, input.contentHash, input.recordedOn, input.actorId]
+      );
+      if (!result.rowCount) {
+        const error = new Error("Patient not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      return result.rows[0];
+    },
+    async getMedicalRecord(id, hospitalId) {
+      const result = await query(
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",p.patient_id AS \"publicPatientId\" FROM medical_records m JOIN patients p ON p.id=m.patient_id WHERE m.id=$1 AND m.hospital_id=$2",
+        [id, hospitalId]
+      );
+      return result.rows[0] || null;
+    },
+    async listMedicalRecordsByPublicId(publicPatientId, hospitalId) {
+      const result = await query(
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\" FROM medical_records m JOIN patients p ON p.id=m.patient_id WHERE p.patient_id=$1 AND m.hospital_id=$2 AND p.status='confirmed' ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
+        [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
+    async listMedicalRecordsForPatient(patientId) {
+      const result = await query(
+        "SELECT id,category,version_index AS \"versionIndex\",prior_record_id AS \"priorRecordId\",record_ref AS \"recordRef\",content_ciphertext AS \"contentCiphertext\",content_hash AS \"contentHash\",recorded_on AS \"recordedOn\",chain_status AS \"chainStatus\",tx_hash AS \"txHash\" FROM medical_records WHERE patient_id=$1 ORDER BY recorded_on ASC, created_at ASC, version_index ASC",
+        [patientId]
+      );
+      return result.rows;
+    },
     async listPatientVisits(patientId) {
       const result = await query(
         "SELECT id, record_reference AS \"recordReference\", record_hash AS \"recordHash\", created_at AS \"createdAt\" FROM visits WHERE patient_id = $1 ORDER BY created_at ASC",

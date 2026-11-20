@@ -36,6 +36,7 @@ export const workspaces = {
       { label: "Overview", to: "/doctor", end: true, icon: Stethoscope },
       { label: "Patient Lookup", to: "/doctor/lookup", icon: Search },
       { label: "Visit References", to: "/doctor/visits", icon: FileSearch },
+      { label: "Clinical records", to: "/doctor/records", icon: ClipboardList },
     ],
   },
   receptionist: {
@@ -58,6 +59,7 @@ export const workspaces = {
       { label: "Overview", to: "/staff", end: true, icon: LayoutDashboard },
       { label: "Patient Lookup", to: "/staff/lookup", icon: Search },
       { label: "Visit References", to: "/staff/visits", icon: FileSearch },
+      { label: "Clinical records", to: "/staff/records", icon: ClipboardList },
     ],
   },
   reviewer: {
@@ -211,6 +213,26 @@ export const pages = {
     ],
     emptyTitle: "No patient selected",
     emptyDescription: "Enter a patient ID to read the identifier, DID, status, and creation time.",
+  },
+  "doctor-records": {
+    eyebrow: "Doctor",
+    title: "Clinical records",
+    description:
+      "Store a diagnosis, prescription, laboratory report, allergy, treatment, or visit for a confirmed patient. The text stays encrypted off-chain.",
+    kind: "table",
+    columns: [],
+    emptyTitle: "No clinical entries",
+    emptyDescription: "Entries appear after they are saved for this patient.",
+  },
+  "staff-records": {
+    eyebrow: "Hospital Staff",
+    title: "Clinical records",
+    description:
+      "Store an encrypted clinical entry for a confirmed patient in this hospital. Chain anchoring stays disabled without patient consent.",
+    kind: "table",
+    columns: [],
+    emptyTitle: "No clinical entries",
+    emptyDescription: "Entries appear after they are saved for this patient.",
   },
   "doctor-visits": {
     eyebrow: "Doctor",

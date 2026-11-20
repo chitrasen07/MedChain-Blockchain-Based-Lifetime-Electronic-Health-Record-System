@@ -39,6 +39,7 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "Registration attempt is no longer retryable",
   "Registration review is not ready",
   "Do not send a recovery secret.",
+  "The hospital wallet cannot anchor a medical record. Patient consent is required.",
 ]);
 
 function errorForStatus(status, serverMessage) {

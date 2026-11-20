@@ -7,6 +7,7 @@ const { z } = require("zod");
 const { encryptJson, decryptJson, fieldHash } = require("./crypto");
 const { issueToken, requireAuth } = require("./auth");
 const { registerPatientAuth } = require("./patientAuth");
+const { registerClinicalRecords } = require("./clinicalRecords");
 
 const profileSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -289,6 +290,7 @@ function createApp({ db, blockchain, config }) {
   });
 
   registerPatientAuth(app, { db, blockchain, config, authRateLimit });
+  registerClinicalRecords(app, { db, config });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {

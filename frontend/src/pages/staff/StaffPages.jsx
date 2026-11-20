@@ -1,3 +1,4 @@
+import { ClinicalRecordScreen } from "../../features/ClinicalRecordScreen";
 import { PatientLookupScreen } from "../../features/PatientLookupScreen";
 import { VisitReferenceScreen } from "../../features/VisitReferenceScreen";
 import { WorkspaceScreen } from "../WorkspaceScreen";
@@ -10,4 +11,7 @@ export function StaffLookupPage() {
 }
 export function StaffVisitsPage() {
   return <VisitReferenceScreen pageKey="staff-visits" />;
+}
+export function StaffRecordsPage() {
+  return <ClinicalRecordScreen pageKey="staff-records" />;
 }

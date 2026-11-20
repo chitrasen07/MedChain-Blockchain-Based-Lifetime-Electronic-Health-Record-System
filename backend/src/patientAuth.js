@@ -3,6 +3,7 @@ const { getAddress, verifyMessage } = require("ethers");
 const { z } = require("zod");
 const { decryptJson, requiredKey } = require("./crypto");
 const { issuePatientToken, requirePatient } = require("./auth");
+const { presentClinicalRecord } = require("./clinicalRecords");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const CLAIM_DELAY_SECONDS = 60 * 60;
@@ -210,25 +211,30 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const visits = await db.listPatientVisits(req.patient.id);
       res.json({
         visits,
-        clinicalChart: "not_stored",
-        medicalRecordRegistry: "awaiting_integration"
+        clinicalChart: "encrypted_separately",
+        medicalRecordRegistry: "consent_required"
       });
     } catch (error) { next(error); }
   });
 
-  app.get("/patient-portal/records", patient, (_req, res) => {
-    res.json({
-      status: "awaiting_integration",
-      records: [],
-      message: "The medical-record registry is not called by the API yet. No record is invented here."
-    });
+  app.get("/patient-portal/records", patient, async (req, res, next) => {
+    try {
+      const key = requiredKey(config.piiEncryptionKey, "PII_ENCRYPTION_KEY", 32);
+      const rows = await db.listMedicalRecordsForPatient(req.patient.id);
+      res.json({
+        records: rows.map((row) => presentClinicalRecord(row, key)),
+        anchoring: "disabled",
+        message: "Clinical entries are encrypted for this patient. The hospital wallet does not anchor hashes, and no consent grant is invented here."
+      });
+    } catch (error) { next(error); }
   });
 
   app.get("/patient-portal/access", patient, (_req, res) => {
     res.json({
-      status: "awaiting_integration",
+      status: "consent_required",
       permissions: [],
-      message: "Consent and access grants are not read from the chain yet. No permission is invented here."
+      grantingDisabled: true,
+      message: "Only the patient controller can grant consent. This portal does not submit a grant, and the hospital wallet cannot grant it."
     });
   });
 }

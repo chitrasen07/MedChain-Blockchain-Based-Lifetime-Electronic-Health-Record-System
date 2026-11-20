@@ -32,6 +32,7 @@ test("migration files are ordered and versioned by filename", async () => {
     "003_matching_review_workflow.sql",
     "004_registration_transactions.sql",
     "005_failed_registration_status.sql",
-    "006_patient_auth_challenges.sql"
+    "006_patient_auth_challenges.sql",
+    "007_medical_records.sql"
   ]);
 });

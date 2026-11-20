@@ -88,7 +88,11 @@ stored by the API.
   hash, and a Sepolia Etherscan link.
 - Patients sign in with a one-time wallet signature checked against the Sepolia
   controller. A recovery code is checked in the browser and is not sent to the
-  API. The portal does not submit the on-chain claim.
+  API. The portal does not submit the on-chain claim on a public network.
+- Doctors and hospital staff can store encrypted diagnoses, prescriptions,
+  laboratory reports, allergies, treatments, and visits. The patient portal
+  shows that patient's own timeline. Record hashes are not anchored by the
+  hospital wallet, and consent cannot be granted by an administrator.
 
 ## Tests
 
