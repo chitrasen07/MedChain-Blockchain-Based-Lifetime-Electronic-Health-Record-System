@@ -1,6 +1,6 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { LOCAL_CLAIM_CHAIN_ID, claimBroadcastAllowed } from "./claimChain.js";
+import { LOCAL_CLAIM_CHAIN_ID, SEPOLIA_CHAIN_ID } from "./claimChain.js";
 
 function selector(signature) {
   const hash = keccak_256(new TextEncoder().encode(signature));
@@ -47,23 +47,57 @@ export function anchorCalldata({ versionIndex, recordRef, patientRef, contentHas
   return `${selector("createRecord(bytes32,bytes32,bytes32,uint256)")}${word(recordRef)}${word(patientRef)}${word(contentHash)}${uintWord(0)}`;
 }
 
-export function consentBroadcastAllowed(chainId) {
-  return claimBroadcastAllowed(chainId);
+export const SEPOLIA_RECORD_ACCESS = "0xe520020bDBE95039697e93B4305cDCe7e682CEa6";
+export const SEPOLIA_MEDICAL_RECORDS = "0x83A6DB7481E7037b9fBd063f14bE50097f8258Cd";
+
+const CONSENT_SELECTORS = new Set([
+  selector("grantAccess(bytes32,address,uint256)"),
+  selector("revokeAccess(bytes32,address)"),
+]);
+const ANCHOR_SELECTORS = new Set([
+  selector("createRecord(bytes32,bytes32,bytes32,uint256)"),
+  selector("appendRecordVersion(bytes32,bytes32,uint256)"),
+]);
+
+export function transactionTarget(action, chainId, localAddress = "") {
+  const chain = Number(chainId);
+  if (chain === SEPOLIA_CHAIN_ID) {
+    if (action === "consent") return SEPOLIA_RECORD_ACCESS;
+    if (action === "anchor") return SEPOLIA_MEDICAL_RECORDS;
+    return "";
+  }
+  if (chain === LOCAL_CLAIM_CHAIN_ID && /^0x[0-9a-fA-F]{40}$/.test(localAddress || "")) return localAddress;
+  return "";
+}
+
+function sepoliaDestination(data) {
+  const chosen = String(data || "").slice(0, 10).toLowerCase();
+  if (CONSENT_SELECTORS.has(chosen)) return SEPOLIA_RECORD_ACCESS;
+  if (ANCHOR_SELECTORS.has(chosen)) return SEPOLIA_MEDICAL_RECORDS;
+  return "";
 }
 
 export async function sendPreparedTransaction({ chainId, contractAddress, data, ethereum }) {
-  if (Number(chainId) !== LOCAL_CLAIM_CHAIN_ID) {
+  const chain = Number(chainId);
+  const address = String(contractAddress || "");
+  if (chain === SEPOLIA_CHAIN_ID) {
+    const destination = sepoliaDestination(data);
+    if (!destination || address.toLowerCase() !== destination.toLowerCase()) {
+      throw Object.assign(new Error("This Sepolia transaction is not one of the approved consent or record actions."), { code: "broadcast_blocked" });
+    }
+  } else if (chain !== LOCAL_CLAIM_CHAIN_ID || !/^0x[0-9a-fA-F]{40}$/.test(address) || !/^0x[0-9a-fA-F]{8,}$/.test(data || "")) {
     throw Object.assign(new Error("Public transactions are not sent without approval."), { code: "broadcast_blocked" });
-  }
-  if (!/^0x[0-9a-fA-F]{40}$/.test(contractAddress || "") || !/^0x[0-9a-fA-F]{8,}$/.test(data || "")) {
-    throw Object.assign(new Error("A local contract address is not configured."), { code: "broadcast_blocked" });
   }
   if (!ethereum?.request) {
     throw Object.assign(new Error("A wallet extension is required. No transaction was sent."), { code: "broadcast_blocked" });
   }
+  const current = Number(await ethereum.request({ method: "eth_chainId" }));
+  if (current !== chain) {
+    throw Object.assign(new Error("Switch the wallet to Sepolia before sending this transaction."), { code: "broadcast_blocked" });
+  }
   const accounts = await ethereum.request({ method: "eth_requestAccounts" });
   return ethereum.request({
     method: "eth_sendTransaction",
-    params: [{ from: accounts[0], to: contractAddress, data }],
+    params: [{ from: accounts[0], to: address, data }],
   });
 }

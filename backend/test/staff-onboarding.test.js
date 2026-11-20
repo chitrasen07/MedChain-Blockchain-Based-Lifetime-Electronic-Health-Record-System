@@ -1,0 +1,115 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const request = require("supertest");
+const { Wallet } = require("ethers");
+const { createApp } = require("../src/app");
+const { issueToken } = require("../src/auth");
+
+const secret = "test-secret-that-is-long-enough";
+const admin = { id: "admin", role: "administrator", hospital_id: "hospital-a", status: "active" };
+
+function appFor() {
+  const calls = [];
+  const challenges = new Map();
+  const users = new Map();
+  const db = {
+    async getUserForAuth(id) { return id === admin.id ? admin : null; },
+    async createStaffWalletChallenge(input) { challenges.set(input.nonce, { ...input, used: false }); },
+    async consumeStaffWalletChallenge(nonce) {
+      const row = challenges.get(nonce);
+      if (!row || row.used) return null;
+      row.used = true;
+      return { walletAddress: row.walletAddress, message: row.message };
+    },
+    async createUser(input) {
+      calls.push("createUser");
+      const id = "staff-1";
+      users.set(id, {
+        id,
+        email: input.email,
+        fullName: input.fullName,
+        role: input.role,
+        status: "active",
+        walletAddress: input.authorization?.walletAddress || null,
+        chainRole: input.authorization?.chainRole || null,
+        authorizationStatus: input.authorization ? "pending" : null,
+        authorizationAction: input.authorization ? "grant" : null
+      });
+      return { id, email: input.email, role: input.role, status: "active", fullName: input.fullName, authorization: input.authorization ? { status: "pending", action: "grant", walletAddress: input.authorization.walletAddress, chainRole: input.authorization.chainRole } : null };
+    },
+    async getStaffMember(id) { return users.get(id) || null; },
+    async saveStaffAuthorization(input) {
+      calls.push("saveStaffAuthorization");
+      const current = users.get(input.userId);
+      users.set(input.userId, { ...current, walletAddress: input.walletAddress, chainRole: input.chainRole, authorizationStatus: "pending", authorizationAction: input.action });
+    },
+    async markStaffAuthorization(id, hospitalId, status) {
+      calls.push(`mark:${status}`);
+      const current = users.get(id);
+      users.set(id, { ...current, authorizationStatus: status });
+    }
+  };
+  const blockchain = {
+    async hospitalSigner() { return "0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F"; },
+    async hasChainRole(roleName, account) {
+      calls.push(`has:${roleName}`);
+      const member = [...users.values()].find((user) => user.walletAddress === account.toLowerCase());
+      return Boolean(member && member.chainRole === roleName && member.authorizationStatus === "active");
+    }
+  };
+  return {
+    app: createApp({ db, blockchain, config: { corsOrigin: false, jwtSecret: secret } }),
+    calls,
+    users
+  };
+}
+
+test("clinical onboarding requires one wallet signature and rejects chain-role escalation", async () => {
+  const wallet = Wallet.createRandom();
+  const { app, calls } = appFor();
+  const token = issueToken(admin, secret);
+  const unsigned = await request(app).post("/admin/users").set("Authorization", `Bearer ${token}`).send({
+    fullName: "Clinical Doctor",
+    email: "doctor@example.test",
+    password: "synthetic-password",
+    role: "doctor"
+  });
+  assert.equal(unsigned.status, 400);
+  assert.equal(unsigned.body.error, "The staff wallet must sign before a clinical account is created.");
+  assert.equal(calls.includes("createUser"), false);
+
+  const escalated = await request(app).post("/admin/staff-wallet/challenge").set("Authorization", `Bearer ${token}`).send({
+    fullName: "Clinical Doctor",
+    email: "doctor@example.test",
+    role: "doctor",
+    chainRole: "SUPER_ADMIN",
+    walletAddress: wallet.address
+  });
+  assert.equal(escalated.status, 400);
+  assert.equal(escalated.body.error, "This role cannot be granted on the blockchain.");
+
+  const challenge = await request(app).post("/admin/staff-wallet/challenge").set("Authorization", `Bearer ${token}`).send({
+    fullName: "Clinical Doctor",
+    email: "doctor@example.test",
+    role: "doctor",
+    walletAddress: wallet.address
+  });
+  assert.equal(challenge.status, 200);
+  assert.equal(challenge.body.chainRole, "DOCTOR");
+  const signature = await wallet.signMessage(challenge.body.message);
+  const created = await request(app).post("/admin/users").set("Authorization", `Bearer ${token}`).send({
+    fullName: "Clinical Doctor",
+    email: "doctor@example.test",
+    password: "synthetic-password",
+    role: "doctor",
+    walletProof: { nonce: challenge.body.nonce, signature }
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.authorization.status, "pending");
+  assert.equal(calls.filter((call) => call === "createUser").length, 1);
+
+  const retry = await request(app).post("/admin/users/staff-1/authorization").set("Authorization", `Bearer ${token}`).send({ chainRole: "DOCTOR" });
+  assert.equal(retry.status, 200);
+  assert.equal(calls.filter((call) => call === "createUser").length, 1);
+  assert.equal(calls.includes("saveStaffAuthorization"), true);
+});

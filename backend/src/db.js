@@ -73,13 +73,88 @@ function createDb(config) {
       const result = await query("SELECT count(*)::int AS count FROM users");
       return result.rows[0].count;
     },
-    async createUser({ email, password, role, hospitalId }) {
-      const result = await query(
-        "INSERT INTO users (email,password_hash,role,hospital_id,status) SELECT $1,$2,$3,id,'active' FROM hospitals WHERE id=$4 AND status='active' RETURNING id,email,role,hospital_id,status",
-        [email.toLowerCase(), hashPassword(password), role, hospitalId]
+    async createUser({ email, password, role, hospitalId, fullName, authorization }) {
+      return transaction(async (client) => {
+        const result = await client.query(
+          "INSERT INTO users (email,password_hash,role,hospital_id,status,full_name) SELECT $1,$2,$3,id,'active',$5 FROM hospitals WHERE id=$4 AND status='active' RETURNING id,email,role,hospital_id,status,full_name AS \"fullName\"",
+          [email.toLowerCase(), hashPassword(password), role, hospitalId, fullName]
+        );
+        if (!result.rowCount) throw Object.assign(new Error("Hospital not found or disabled"), { statusCode: 404 });
+        const user = result.rows[0];
+        if (authorization) {
+          await client.query(
+            "INSERT INTO staff_chain_authorizations (user_id,wallet_address,chain_role,status,action) VALUES ($1,$2,$3,'pending','grant')",
+            [user.id, authorization.walletAddress, authorization.chainRole]
+          );
+          user.authorization = { status: "pending", action: "grant", walletAddress: authorization.walletAddress, chainRole: authorization.chainRole };
+        }
+        return user;
+      });
+    },
+    async createStaffWalletChallenge({ walletAddress, nonce, message, expiresAt }) {
+      await query(
+        "INSERT INTO staff_wallet_challenges (nonce,wallet_address,message,expires_at) VALUES ($1,$2,$3,$4)",
+        [nonce, walletAddress, message, expiresAt]
       );
-      if (!result.rowCount) throw Object.assign(new Error("Hospital not found or disabled"), { statusCode: 404 });
-      return result.rows[0];
+    },
+    async consumeStaffWalletChallenge(nonce) {
+      const result = await query(
+        "UPDATE staff_wallet_challenges SET used_at = now() WHERE nonce = $1 AND used_at IS NULL AND expires_at > now() RETURNING wallet_address AS \"walletAddress\", message",
+        [nonce]
+      );
+      return result.rows[0] || null;
+    },
+    async updateStaffName(userId, hospitalId, fullName) {
+      const result = await query(
+        "UPDATE users SET full_name=$3 WHERE id=$1 AND hospital_id=$2 RETURNING id",
+        [userId, hospitalId, fullName]
+      );
+      if (!result.rowCount) throw Object.assign(new Error("User not found"), { statusCode: 404 });
+    },
+    async getStaffMember(userId, hospitalId) {
+      const result = await query(
+        "SELECT u.id,u.email,u.full_name AS \"fullName\",u.role,u.status,a.wallet_address AS \"walletAddress\",a.chain_role AS \"chainRole\",a.previous_chain_role AS \"previousChainRole\",a.previous_wallet_address AS \"previousWalletAddress\",a.status AS \"authorizationStatus\",a.action AS \"authorizationAction\",a.tx_hash AS \"authorizationTx\" FROM users u LEFT JOIN staff_chain_authorizations a ON a.user_id=u.id WHERE u.id=$1 AND u.hospital_id=$2",
+        [userId, hospitalId]
+      );
+      return result.rows[0] || null;
+    },
+    async saveStaffAuthorization({ userId, hospitalId, walletAddress, chainRole, previousChainRole, previousWalletAddress, action }) {
+      const owner = await query("SELECT id,role FROM users WHERE id=$1 AND hospital_id=$2", [userId, hospitalId]);
+      if (!owner.rowCount) throw Object.assign(new Error("User not found"), { statusCode: 404 });
+      if (owner.rows[0].role === "administrator") throw Object.assign(new Error("This role cannot be granted on the blockchain."), { statusCode: 400 });
+      await query(
+        "INSERT INTO staff_chain_authorizations (user_id,wallet_address,chain_role,previous_chain_role,previous_wallet_address,status,action,tx_hash) VALUES ($1,$2,$3,$4,$5,'pending',$6,NULL) ON CONFLICT (user_id) DO UPDATE SET wallet_address=EXCLUDED.wallet_address,chain_role=EXCLUDED.chain_role,previous_chain_role=EXCLUDED.previous_chain_role,previous_wallet_address=EXCLUDED.previous_wallet_address,status='pending',action=EXCLUDED.action,tx_hash=NULL,updated_at=now()",
+        [userId, walletAddress, chainRole, previousChainRole || null, previousWalletAddress || null, action]
+      );
+    },
+    async markStaffAuthorization(userId, hospitalId, status, txHash) {
+      const result = await query(
+        "UPDATE staff_chain_authorizations AS authorization SET status=$3, tx_hash=COALESCE($4, authorization.tx_hash), updated_at=now() FROM users WHERE users.id=authorization.user_id AND users.id=$1 AND users.hospital_id=$2 RETURNING authorization.status",
+        [userId, hospitalId, status, txHash || null]
+      );
+      if (!result.rowCount) throw Object.assign(new Error("User not found"), { statusCode: 404 });
+    },
+    async clearStaffAuthorization(userId, hospitalId) {
+      await query(
+        "DELETE FROM staff_chain_authorizations USING users WHERE staff_chain_authorizations.user_id=users.id AND users.id=$1 AND users.hospital_id=$2",
+        [userId, hospitalId]
+      );
+    },
+    async changeStaffRole({ userId, hospitalId, role, authorization }) {
+      return transaction(async (client) => {
+        const result = await client.query(
+          "UPDATE users SET role=$3 WHERE id=$1 AND hospital_id=$2 AND role<>'administrator' RETURNING id,email,role,status,full_name AS \"fullName\"",
+          [userId, hospitalId, role]
+        );
+        if (!result.rowCount) throw Object.assign(new Error("User not found"), { statusCode: 404 });
+        if (authorization) {
+          await client.query(
+            "INSERT INTO staff_chain_authorizations (user_id,wallet_address,chain_role,previous_chain_role,previous_wallet_address,status,action) VALUES ($1,$2,$3,$4,$5,'pending',$6) ON CONFLICT (user_id) DO UPDATE SET wallet_address=EXCLUDED.wallet_address,chain_role=EXCLUDED.chain_role,previous_chain_role=EXCLUDED.previous_chain_role,previous_wallet_address=EXCLUDED.previous_wallet_address,status='pending',action=EXCLUDED.action,tx_hash=NULL,updated_at=now()",
+            [userId, authorization.walletAddress, authorization.chainRole, authorization.previousChainRole || null, authorization.previousWalletAddress || null, authorization.action]
+          );
+        }
+        return result.rows[0];
+      });
     },
     async bootstrapAdmin({ email, password, hospitalId, hospitalName }) {
       return transaction(async (client) => {
@@ -99,11 +174,15 @@ function createDb(config) {
         [userId, hospitalId, actorId]
       );
       if (!result.rowCount) throw Object.assign(new Error("User not found"), { statusCode: 404 });
+      await query(
+        "UPDATE staff_chain_authorizations SET action='revoke', status='pending', updated_at=now() WHERE user_id=$1",
+        [userId]
+      );
       await query("INSERT INTO audit_events (actor_id,action,resource_id,metadata) VALUES ($1,'USER_DISABLED',$2,$3)", [actorId, userId, JSON.stringify({ hospitalId })]);
     },
     async listUsers(hospitalId) {
       const result = await query(
-        "SELECT id,email,role,status,created_at AS \"createdAt\" FROM users WHERE hospital_id=$1 ORDER BY created_at",
+        "SELECT u.id,u.email,u.full_name AS \"fullName\",u.role,u.status,u.created_at AS \"createdAt\",a.wallet_address AS \"walletAddress\",a.chain_role AS \"chainRole\",a.previous_chain_role AS \"previousChainRole\",a.previous_wallet_address AS \"previousWalletAddress\",a.status AS \"authorizationStatus\",a.action AS \"authorizationAction\",a.tx_hash AS \"authorizationTx\" FROM users u LEFT JOIN staff_chain_authorizations a ON a.user_id=u.id WHERE u.hospital_id=$1 ORDER BY u.created_at",
         [hospitalId]
       );
       return result.rows;

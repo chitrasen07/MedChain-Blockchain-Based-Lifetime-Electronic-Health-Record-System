@@ -9,7 +9,7 @@ const WALLET_REQUIRED = "Connect the clinical wallet that holds patient consent.
 const NOT_CLINICAL = "This wallet is not eligible clinical staff on-chain.";
 const NOT_RESPONDER = "This wallet is not an emergency responder.";
 const EMERGENCY_COOLDOWN = "Emergency access is in cooldown.";
-const ANCHOR_PREPARED = "Sign this with the consented clinical wallet. The hospital wallet is not used. Public networks are not sent without approval.";
+const ANCHOR_PREPARED = "Sign this with the consented clinical wallet in MetaMask. The hospital wallet is not used.";
 
 const recordAccessInterface = new Interface([
   "function grantAccess(bytes32 patientRef, address authorizedAddress, uint256 expiresAt)",

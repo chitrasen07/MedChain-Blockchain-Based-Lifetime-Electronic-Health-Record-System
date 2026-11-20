@@ -7,7 +7,7 @@ import { Input } from "../components/Input";
 import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { ApiError, messageForRequest } from "../lib/api";
-import { consentBroadcastAllowed, emergencyRequestCalldata, reasonHash, sendPreparedTransaction } from "../lib/consentChain";
+import { emergencyRequestCalldata, reasonHash, sendPreparedTransaction, transactionTarget } from "../lib/consentChain";
 import { pageChrome } from "../lib/pageChrome";
 import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
 import { clinicalService } from "../services/clinicalService";
@@ -30,7 +30,7 @@ export function EmergencyAccessScreen({ pageKey }) {
   const [sessions, setSessions] = useState([]);
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
-  const canSend = consentBroadcastAllowed(chainId) && Boolean(import.meta.env?.VITE_LOCAL_EMERGENCY_ACCESS) && Boolean(prepared);
+  const canSend = Boolean(transactionTarget("emergency", chainId, import.meta.env?.VITE_LOCAL_EMERGENCY_ACCESS)) && Boolean(prepared);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;

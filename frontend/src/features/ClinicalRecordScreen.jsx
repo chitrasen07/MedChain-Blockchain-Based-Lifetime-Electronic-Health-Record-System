@@ -8,7 +8,8 @@ import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, messageForRequest } from "../lib/api";
-import { anchorCalldata, consentBroadcastAllowed, sendPreparedTransaction } from "../lib/consentChain";
+import { SEPOLIA_CHAIN_ID } from "../lib/claimChain";
+import { anchorCalldata, sendPreparedTransaction, transactionTarget } from "../lib/consentChain";
 import { sepoliaTransactionUrl } from "../lib/ownership";
 import { pageChrome } from "../lib/pageChrome";
 import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
@@ -38,7 +39,8 @@ export function ClinicalRecordScreen({ pageKey }) {
   const [saving, setSaving] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
   const [chainId, setChainId] = useState(null);
-  const anchorAllowed = consentBroadcastAllowed(chainId) && Boolean(import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
+  const anchorTarget = transactionTarget("anchor", chainId, import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
+  const anchorAllowed = Boolean(anchorTarget);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
@@ -54,6 +56,17 @@ export function ClinicalRecordScreen({ pageKey }) {
       active = false;
     };
   }, [page.title]);
+
+  async function useSepolia() {
+    setNotice("");
+    try {
+      await globalThis.window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xaa36a7" }] });
+      setChainId(SEPOLIA_CHAIN_ID);
+      setNotice("The wallet is on Sepolia. No record transaction has been sent.");
+    } catch (error) {
+      setNotice(error?.code === 4001 ? "MetaMask did not approve the network change." : error?.message || "The wallet was not switched.");
+    }
+  }
 
   async function connectWallet() {
     setNotice("");
@@ -100,13 +113,13 @@ export function ClinicalRecordScreen({ pageKey }) {
         setNotice("The prepared transaction did not match this record. Nothing was sent.");
         return;
       }
-      await sendPreparedTransaction({
+      const hash = await sendPreparedTransaction({
         chainId,
-        contractAddress: import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY,
+        contractAddress: anchorTarget,
         data: local,
         ethereum: globalThis.window?.ethereum,
       });
-      setNotice("The hash was sent from the clinical wallet on the local network.");
+      setNotice(`The record hash was submitted by the clinical wallet. MetaMask approval was required. ${hash}`);
     } catch (error) {
       setNotice(error instanceof ApiError ? messageForRequest(error) : error?.message || "The anchor was not sent.");
     }
@@ -139,7 +152,7 @@ export function ClinicalRecordScreen({ pageKey }) {
     <div>
       <PageHeader eyebrow={page.eyebrow} title={page.title} description={page.description} crumbs={crumbs} />
       <VerificationNotice>
-        Saving a chart requires a consented clinical wallet. Anchoring that hash on Sepolia is prepared here and is not broadcast.
+        Saving a chart stores encrypted data only after the wallet has a clinical role and the patient has granted consent. Anchoring the hash on Sepolia asks MetaMask to approve. The hospital signing key is not used.
       </VerificationNotice>
       <form onSubmit={onSubmit} noValidate>
         <Card
@@ -148,6 +161,7 @@ export function ClinicalRecordScreen({ pageKey }) {
         >
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <Button type="button" variant="secondary" onClick={connectWallet}>Connect clinical wallet</Button>
+            <Button type="button" variant="secondary" onClick={useSepolia} disabled={chainId === SEPOLIA_CHAIN_ID}>Use Sepolia</Button>
             <p className="text-sm text-muted">{walletAddress || "No clinical wallet connected."}</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -182,7 +196,7 @@ export function ClinicalRecordScreen({ pageKey }) {
             <Button type="submit" loading={saving} disabled={loading || saving || !walletAddress}>Save encrypted entry</Button>
           </div>
           <p className="mt-3 text-xs leading-5 text-muted">
-            Anchoring is signed by the consented clinical wallet. It stays disabled on Sepolia until a public transaction is approved. The hospital signing key cannot grant consent or submit the hash.
+            Anchoring is signed by the consented clinical wallet in MetaMask. A wallet without the Doctor role cannot save or anchor a record. The hospital signing key cannot grant consent or submit the hash.
           </p>
         </Card>
       </form>

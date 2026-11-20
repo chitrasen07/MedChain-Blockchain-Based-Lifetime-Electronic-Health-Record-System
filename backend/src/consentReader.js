@@ -31,7 +31,8 @@ function unavailable(fail) {
     emergencyCooldown: reject,
     listConsent: reject,
     listEmergency: reject,
-    listAudit: reject
+    listAudit: reject,
+    hasChainRole: reject
   };
 }
 
@@ -108,6 +109,16 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
     },
     async isEmergencyResponder(account) {
       return (await roleManager()).isEmergencyResponder(account);
+    },
+    async hasChainRole(roleName, account) {
+      const allowed = ["DOCTOR", "NURSE", "LAB_TECHNICIAN", "PHARMACIST", "SPECIALIST"];
+      if (!allowed.includes(roleName)) return false;
+      const registry = new Contract(registryAddress, ["function roleManager() view returns (address)"], provider);
+      const address = await registry.roleManager();
+      const roles = new Contract(address, [
+        "function hasRole(bytes32 role, address account) view returns (bool)"
+      ], provider);
+      return roles.hasRole(id(roleName), getAddress(account));
     },
     async hasAccess(patientRef, account) {
       return (await scope()).access.hasAccess(patientRef, account);

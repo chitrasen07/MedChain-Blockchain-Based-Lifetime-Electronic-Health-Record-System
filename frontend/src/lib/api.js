@@ -34,6 +34,14 @@ function resolveBase(baseUrl) {
 
 const PUBLIC_REQUEST_MESSAGES = new Set([
   "A staff account with this email already exists.",
+  "This wallet is already linked to a staff account.",
+  "The staff wallet must sign before a clinical account is created.",
+  "A doctor account uses the Doctor chain role.",
+  "Choose Nurse, Lab technician, Pharmacist, or Specialist for hospital staff.",
+  "This role does not use a blockchain wallet.",
+  "This role cannot be granted on the blockchain.",
+  "The hospital administrator wallet cannot be the staff wallet.",
+  "Enter the staff member's name.",
   "A patient with this identity commitment is already registered.",
   "Candidate is not part of this review.",
   "Registration attempt is no longer retryable",

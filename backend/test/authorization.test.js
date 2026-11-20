@@ -21,7 +21,7 @@ function setup(user) {
     },
     async createUser(input) {
       calls.push({ provisioned: input });
-      return { id: "u2", email: input.email, role: input.role, status: "active" };
+      return { id: "u2", email: input.email, role: input.role, status: "active", fullName: input.fullName };
     }
   };
   return { app: createApp({ db, blockchain: {}, config }), calls };
@@ -82,13 +82,15 @@ test("hospital administrators can provision least-privilege users in their hospi
   const response = await request(app)
     .post("/admin/users")
     .set("Authorization", `Bearer ${token(user)}`)
-    .send({ email: "doctor@example.test", password: "synthetic-password", role: "doctor" });
+    .send({ fullName: "Synthetic Receptionist", email: "doctor@example.test", password: "synthetic-password", role: "receptionist" });
   assert.equal(response.status, 201);
   assert.deepEqual(response.body, {
     id: "u2",
     email: "doctor@example.test",
-    role: "doctor",
-    status: "active"
+    fullName: "Synthetic Receptionist",
+    role: "receptionist",
+    status: "active",
+    authorization: null
   });
 });
 
@@ -178,7 +180,7 @@ test("duplicate staff email returns 409 without the database detail", async () =
   const response = await request(app)
     .post("/admin/users")
     .set("Authorization", `Bearer ${token(user)}`)
-    .send({ email: "doctor@example.test", password: "synthetic-password", role: "doctor" });
+    .send({ fullName: "Synthetic Doctor", email: "doctor@example.test", password: "synthetic-password", role: "receptionist" });
   assert.equal(response.status, 409);
   assert.deepEqual(response.body, { error: "A staff account with this email already exists." });
   assert.equal(JSON.stringify(response.body).includes("doctor@example.test"), false);
@@ -203,7 +205,7 @@ test("a different unique violation stays an internal error", async () => {
   const response = await request(app)
     .post("/admin/users")
     .set("Authorization", `Bearer ${token(user)}`)
-    .send({ email: "doctor@example.test", password: "synthetic-password", role: "doctor" });
+    .send({ fullName: "Synthetic Doctor", email: "doctor@example.test", password: "synthetic-password", role: "receptionist" });
   assert.equal(response.status, 500);
   assert.deepEqual(response.body, { error: "Internal server error" });
   assert.equal(JSON.stringify(response.body).includes("PATIENT-000001"), false);

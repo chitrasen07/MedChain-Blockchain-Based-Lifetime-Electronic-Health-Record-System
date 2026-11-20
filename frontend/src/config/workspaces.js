@@ -179,7 +179,7 @@ export const pages = {
     eyebrow: "Hospital Admin",
     title: "Hospital Staff Directory",
     description:
-      "List accounts in this hospital, create a receptionist, doctor, reviewer, or hospital staff account, or disable an account.",
+      "List accounts in this hospital, create a receptionist, doctor, reviewer, or hospital staff account, disable an account, or assign a clinical wallet role on Sepolia.",
     kind: "table",
     columns: [
       { key: "email", header: "Email" },

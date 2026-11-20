@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim } from "../src/lib/claimChain.js";
-import { anchorCalldata, emergencyRequestCalldata, grantCalldata, reasonHash, revokeCalldata, sendPreparedTransaction } from "../src/lib/consentChain.js";
+import { SEPOLIA_MEDICAL_RECORDS, SEPOLIA_RECORD_ACCESS, anchorCalldata, emergencyRequestCalldata, grantCalldata, reasonHash, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../src/lib/consentChain.js";
+import { assignRoleCalldata, revokeRoleCalldata, sendRoleAssignment } from "../src/lib/roleChain.js";
 import { clinicalRequestBody } from "../src/services/clinicalService.js";
 
 const require = createRequire(import.meta.url);
-const { Interface, keccak256, toUtf8Bytes } = require("../../backend/node_modules/ethers");
+const { Interface, id, keccak256, toUtf8Bytes } = require("../../backend/node_modules/ethers");
 
 describe("clinical records and claims", () => {
   it("sends clinical fields to the hospital service and does not build an anchor request", () => {
@@ -115,8 +116,62 @@ describe("clinical records and claims", () => {
         data: grantCalldata(patientRef, wallet, 0),
         ethereum: { request() { requested = true; } },
       }),
-      /not sent without approval/,
+      /approved consent or record/,
     );
     assert.equal(requested, false);
+    let emergencyRequested = false;
+    await assert.rejects(
+      () => sendPreparedTransaction({
+        chainId: 11155111,
+        contractAddress: "0x7c662d0649eDa6406Decd37020a2aD3ea811Fbd6",
+        data: emergencyRequestCalldata(patientRef, reason, 3600),
+        ethereum: { request() { emergencyRequested = true; } },
+      }),
+      /approved consent or record/,
+    );
+    assert.equal(emergencyRequested, false);
+    assert.equal(transactionTarget("anchor", 11155111), SEPOLIA_MEDICAL_RECORDS);
+    assert.equal(transactionTarget("consent", 11155111), SEPOLIA_RECORD_ACCESS);
+    assert.equal(transactionTarget("emergency", 11155111, "0x7c662d0649eDa6406Decd37020a2aD3ea811Fbd6"), "");
+    const calls = [];
+    const ethereum = {
+      async request({ method, params }) {
+        calls.push({ method, params });
+        if (method === "eth_chainId") return "0xaa36a7";
+        if (method === "eth_requestAccounts") return ["0x70997970C51812dc3A010C7d01b50e0d17dc79C8"];
+        if (method === "eth_sendTransaction") return `0x${"34".repeat(32)}`;
+        throw new Error(method);
+      },
+    };
+    const sent = await sendPreparedTransaction({
+      chainId: 11155111,
+      contractAddress: SEPOLIA_RECORD_ACCESS,
+      data: grantCalldata(patientRef, wallet, 0),
+      ethereum,
+    });
+    assert.equal(sent, `0x${"34".repeat(32)}`);
+    assert.equal(calls.at(-1).params[0].to, SEPOLIA_RECORD_ACCESS);
+    const doctor = "0xf7d8e63eb6d81c4faded4fdda7edb10d28b54bb0";
+    const roles = new Interface([
+      "function assignRole(bytes32 role, address account)",
+      "function revokeRole(bytes32 role, address account)",
+    ]);
+    assert.equal(assignRoleCalldata("DOCTOR", doctor), roles.encodeFunctionData("assignRole", [id("DOCTOR"), doctor]));
+    assert.equal(assignRoleCalldata("SUPER_ADMIN", doctor), "");
+    assert.equal(revokeRoleCalldata("DOCTOR", doctor), roles.encodeFunctionData("revokeRole", [id("DOCTOR"), doctor]));
+    assert.equal(revokeRoleCalldata("HOSPITAL_ADMIN", doctor), "");
+    const roleCalls = [];
+    const roleEthereum = {
+      async request({ method, params }) {
+        roleCalls.push({ method, params });
+        if (method === "eth_chainId") return "0xaa36a7";
+        if (method === "eth_requestAccounts") return ["0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F"];
+        if (method === "eth_sendTransaction") return `0x${"56".repeat(32)}`;
+        throw new Error(method);
+      },
+    };
+    await sendRoleAssignment({ chainId: 11155111, roleName: "DOCTOR", account: doctor, ethereum: roleEthereum });
+    assert.equal(roleCalls.at(-1).params[0].to, "0xDE4331A5D901B1aBBbE98B51F075e5D0A5894B78");
+    assert.equal(roleCalls.at(-1).params[0].data, assignRoleCalldata("DOCTOR", doctor));
   });
 });

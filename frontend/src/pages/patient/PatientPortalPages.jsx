@@ -10,8 +10,8 @@ import { PageHeader } from "../../components/PageHeader";
 import { StatusBadge } from "../../components/StatusBadge";
 import { VerificationNotice } from "../../components/VerificationNotice";
 import { ApiError, apiClient, messageForRequest } from "../../lib/api";
-import { claimBroadcastAllowed, sendPatientClaim } from "../../lib/claimChain";
-import { consentBroadcastAllowed, grantCalldata, revokeCalldata, sendPreparedTransaction } from "../../lib/consentChain";
+import { SEPOLIA_CHAIN_ID, claimBroadcastAllowed, sendPatientClaim } from "../../lib/claimChain";
+import { grantCalldata, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../../lib/consentChain";
 import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode, sepoliaTransactionUrl } from "../../lib/ownership";
 import { useAuth } from "../../context/useAuth";
 import { claimStatusBody, patientAuthMessage } from "../../services/patientPortal";
@@ -431,7 +431,8 @@ export function PatientAccessPage() {
   const [prepared, setPrepared] = useState("");
   const [notice, setNotice] = useState("");
   const [chainId, setChainId] = useState(null);
-  const broadcastAllowed = consentBroadcastAllowed(chainId) && Boolean(import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
+  const consentTarget = transactionTarget("consent", chainId, import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
+  const broadcastAllowed = Boolean(consentTarget);
   const permissions = state.data?.permissions || [];
   const emergency = state.data?.emergency || [];
   const audit = state.data?.audit || [];
@@ -471,18 +472,29 @@ export function PatientAccessPage() {
       return;
     }
     setPrepared(data);
-    setNotice("The grant is prepared in this browser. It is not sent on a public network.");
+    setNotice("The grant is prepared. MetaMask will ask the patient wallet to approve it.");
+  }
+
+  async function useSepolia() {
+    setNotice("");
+    try {
+      await globalThis.window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xaa36a7" }] });
+      setChainId(SEPOLIA_CHAIN_ID);
+      setNotice("The wallet is on Sepolia. No consent transaction has been sent.");
+    } catch (error) {
+      setNotice(error?.code === 4001 ? "MetaMask did not approve the network change." : error?.message || "The wallet was not switched.");
+    }
   }
 
   async function sendPrepared(data) {
     try {
       await sendPreparedTransaction({
         chainId,
-        contractAddress: import.meta.env?.VITE_LOCAL_RECORD_ACCESS,
+        contractAddress: consentTarget,
         data,
         ethereum: globalThis.window?.ethereum,
       });
-      setNotice("The consent transaction was sent on the local network.");
+      setNotice("The consent transaction was submitted. MetaMask approval was required.");
     } catch (error) {
       setNotice(error?.message || "The consent transaction was not sent.");
     }
@@ -496,7 +508,7 @@ export function PatientAccessPage() {
         badge={<StatusBadge tone={permissions.some((item) => item.active) ? "success" : "warning"}>{state.data?.status === "active" ? "Active" : "Consent required"}</StatusBadge>}
       />
       <VerificationNotice>
-        Grants and revocations are prepared for the controller wallet. They are not sent to Sepolia from this page.
+        Grants and revocations are sent by the patient controller wallet. MetaMask must approve each Sepolia transaction. The hospital wallet cannot grant or revoke consent.
       </VerificationNotice>
       {state.phase === "loading" ? <LoadingSkeleton label="Loading access permissions" /> : null}
       {state.phase === "error" ? <ErrorState title="Access permissions unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
@@ -518,7 +530,7 @@ export function PatientAccessPage() {
                   </div>
                   <p className="mt-1 break-all text-xs text-muted">{permission.wallet}</p>
                   <Button className="mt-2" type="button" variant="secondary" disabled={grantingDisabled || !broadcastAllowed || !revoke || permission.status !== "active"} onClick={() => sendPrepared(revoke)}>
-                    Revoke consent
+                    Revoke consent in MetaMask
                   </Button>
                 </li>
               );
@@ -534,12 +546,13 @@ export function PatientAccessPage() {
             {notice ? <p role="status" className="text-sm leading-6 text-ink">{notice}</p> : null}
             {prepared ? <p className="break-all text-xs leading-5 text-muted">{prepared}</p> : null}
             <div className="flex flex-wrap gap-3">
+              <Button type="button" variant="secondary" onClick={useSepolia} disabled={chainId === SEPOLIA_CHAIN_ID}>Use Sepolia</Button>
               <Button type="submit" disabled={grantingDisabled}>Prepare grant</Button>
               <Button type="button" variant="secondary" disabled={grantingDisabled || !broadcastAllowed || !prepared} onClick={() => sendPrepared(prepared)}>
-                Send on local network
+                Approve grant in MetaMask
               </Button>
             </div>
-            <p className="text-xs leading-5 text-muted">The controller signs this transaction. Sepolia stays disabled, and the hospital wallet is not asked to sign.</p>
+            <p className="text-xs leading-5 text-muted">The controller signs this transaction on the connected network. The hospital wallet is not asked to sign.</p>
           </form>
         </Card>
       ) : null}

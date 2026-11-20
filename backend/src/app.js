@@ -10,6 +10,13 @@ const { registerPatientAuth } = require("./patientAuth");
 const { registerClinicalRecords } = require("./clinicalRecords");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
+const {
+  WALLET_REQUIRED,
+  chainRoleFor,
+  isClinicalRole,
+  messageMatches,
+  staffWalletMessage
+} = require("./staffAuthorization");
 
 const profileSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -321,15 +328,192 @@ function createApp({ db, blockchain, config }) {
     } catch (error) { next(error); }
   });
 
+  app.post("/admin/staff-wallet/challenge", authRateLimit, admin, async (req, res, next) => {
+    try {
+      const input = z.object({
+        fullName: z.string().trim().min(2).max(200),
+        email: z.string().trim().email().max(320),
+        role: z.enum(["doctor", "hospital_staff"]),
+        chainRole: z.string().trim().optional(),
+        walletAddress: z.string().trim().regex(/^0x[0-9a-fA-F]{40}$/)
+      }).parse(req.body);
+      const walletAddress = getAddress(input.walletAddress);
+      const chainRole = chainRoleFor(input.role, input.chainRole);
+      if (typeof blockchain.hospitalSigner === "function") {
+        const signer = await blockchain.hospitalSigner();
+        if (getAddress(signer) === walletAddress) {
+          return res.status(400).json({ error: "The hospital administrator wallet cannot be the staff wallet." });
+        }
+      }
+      const nonce = `0x${crypto.randomBytes(32).toString("hex")}`;
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      const message = staffWalletMessage({
+        fullName: input.fullName,
+        email: input.email.toLowerCase(),
+        role: input.role,
+        chainRole,
+        walletAddress,
+        nonce,
+        expiresAt
+      });
+      await db.createStaffWalletChallenge({ walletAddress: walletAddress.toLowerCase(), nonce, message, expiresAt });
+      res.json({ nonce, message, expiresAt, chainRole });
+    } catch (error) { next(error); }
+  });
+
+  async function verifiedStaffWallet({ fullName, email, role, chainRole, walletProof }) {
+    const nonce = typeof walletProof?.nonce === "string" ? walletProof.nonce.trim().toLowerCase() : "";
+    const signature = typeof walletProof?.signature === "string" ? walletProof.signature.trim() : "";
+    if (!/^0x[0-9a-f]{64}$/.test(nonce) || !/^0x[0-9a-f]+$/i.test(signature) || typeof db.consumeStaffWalletChallenge !== "function") {
+      const error = new Error(WALLET_REQUIRED);
+      error.statusCode = 400;
+      throw error;
+    }
+    const challenge = await db.consumeStaffWalletChallenge(nonce);
+    let signer = "";
+    try { signer = getAddress(verifyMessage(challenge?.message || "", signature)).toLowerCase(); } catch { signer = ""; }
+    const walletAddress = getAddress(signer || "0x0000000000000000000000000000000000000000");
+    if (!challenge || signer !== challenge.walletAddress || !messageMatches(challenge.message, {
+      fullName,
+      email: email.toLowerCase(),
+      role,
+      chainRole,
+      walletAddress
+    })) {
+      const error = new Error("The wallet signature could not be verified.");
+      error.statusCode = 400;
+      throw error;
+    }
+    return signer;
+  }
+
   app.post("/admin/users", admin, async (req, res, next) => {
     try {
       const input = z.object({
-        email: z.string().email(),
+        fullName: z.string().trim().min(2).max(200),
+        email: z.string().trim().email().max(320),
         password: z.string().min(12),
-        role: z.enum(["receptionist", "doctor", "reviewer", "hospital_staff"])
+        role: z.enum(["receptionist", "doctor", "reviewer", "hospital_staff"]),
+        chainRole: z.string().trim().optional(),
+        walletProof: z.object({ nonce: z.string(), signature: z.string() }).optional()
       }).parse(req.body);
-      const user = await db.createUser({ ...input, hospitalId: req.user.hospital_id });
-      res.status(201).json({ id: user.id, email: user.email, role: user.role, status: user.status });
+      const chainRole = chainRoleFor(input.role, input.chainRole);
+      let authorization = null;
+      if (isClinicalRole(input.role)) {
+        const walletAddress = await verifiedStaffWallet({ ...input, chainRole });
+        authorization = { walletAddress, chainRole };
+      }
+      const user = await db.createUser({ ...input, hospitalId: req.user.hospital_id, authorization });
+      res.status(201).json({
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        status: user.status,
+        authorization: user.authorization || null
+      });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/admin/users/:id/authorization", admin, async (req, res, next) => {
+    try {
+      const input = z.object({
+        fullName: z.string().trim().min(2).max(200).optional(),
+        chainRole: z.string().trim().optional(),
+        walletProof: z.object({ nonce: z.string(), signature: z.string() }).optional()
+      }).parse(req.body);
+      const member = await db.getStaffMember(req.params.id, req.user.hospital_id);
+      if (!member || member.role === "administrator") return res.status(404).json({ error: "User not found" });
+      const fullName = input.fullName || member.fullName;
+      if (!fullName) return res.status(400).json({ error: "Enter the staff member's name." });
+      if (input.fullName && input.fullName !== member.fullName) await db.updateStaffName(member.id, req.user.hospital_id, input.fullName);
+      member.fullName = fullName;
+      const chainRole = chainRoleFor(member.role, input.chainRole || member.chainRole);
+      if (!isClinicalRole(member.role)) return res.status(400).json({ error: "This role does not use a blockchain wallet." });
+      const walletAddress = input.walletProof
+        ? await verifiedStaffWallet({ fullName: member.fullName, email: member.email, role: member.role, chainRole, walletProof: input.walletProof })
+        : member.walletAddress;
+      if (!walletAddress) return res.status(400).json({ error: WALLET_REQUIRED });
+      await db.saveStaffAuthorization({
+        userId: member.id,
+        hospitalId: req.user.hospital_id,
+        walletAddress,
+        chainRole,
+        previousChainRole: member.chainRole && member.chainRole !== chainRole ? member.chainRole : member.previousChainRole,
+        previousWalletAddress: member.walletAddress && member.walletAddress !== walletAddress ? member.walletAddress : member.previousWalletAddress,
+        action: "grant"
+      });
+      res.json({ id: member.id, authorization: { status: "pending", action: "grant", walletAddress, chainRole } });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/admin/users/:id/authorization/result", admin, async (req, res, next) => {
+    try {
+      const input = z.object({
+        status: z.enum(["failed"]),
+        txHash: z.string().trim().regex(/^0x[0-9a-fA-F]{64}$/).optional()
+      }).parse(req.body);
+      await db.markStaffAuthorization(req.params.id, req.user.hospital_id, input.status, input.txHash);
+      res.json({ status: input.status });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/admin/users/:id/authorization/verify", admin, async (req, res, next) => {
+    try {
+      const member = await db.getStaffMember(req.params.id, req.user.hospital_id);
+      if (!member?.walletAddress || !member.chainRole) return res.status(404).json({ error: "User not found" });
+      if (typeof blockchain.hasChainRole !== "function") return res.status(503).json({ error: "Service unavailable" });
+      const holds = async (role, wallet) => role && wallet ? Boolean(await blockchain.hasChainRole(role, wallet)) : false;
+      const desiredHeld = await holds(member.chainRole, member.walletAddress);
+      const previousHeld = await holds(member.previousChainRole, member.previousWalletAddress || member.walletAddress);
+      const previousWalletHeld = member.previousWalletAddress && member.previousWalletAddress !== member.walletAddress
+        ? await holds(member.chainRole, member.previousWalletAddress)
+        : false;
+      const clearing = member.authorizationAction === "revoke" || member.status === "disabled" || !isClinicalRole(member.role);
+      const matches = clearing ? !desiredHeld && !previousHeld : desiredHeld && !previousHeld && !previousWalletHeld;
+      if (!matches) return res.json({ status: member.authorizationStatus || "pending", verified: false });
+      if (clearing) {
+        await db.clearStaffAuthorization(member.id, req.user.hospital_id);
+        return res.json({ status: "active", verified: true, cleared: true });
+      }
+      await db.markStaffAuthorization(member.id, req.user.hospital_id, "active", member.authorizationTx);
+      res.json({ status: "active", verified: true });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/admin/users/:id/role", admin, async (req, res, next) => {
+    try {
+      const input = z.object({
+        role: z.enum(["receptionist", "doctor", "reviewer", "hospital_staff"]),
+        chainRole: z.string().trim().optional(),
+        walletProof: z.object({ nonce: z.string(), signature: z.string() }).optional()
+      }).parse(req.body);
+      if (req.params.id === req.user.sub) return res.status(400).json({ error: "This role cannot be granted on the blockchain." });
+      const member = await db.getStaffMember(req.params.id, req.user.hospital_id);
+      if (!member || member.role === "administrator") return res.status(404).json({ error: "User not found" });
+      const chainRole = chainRoleFor(input.role, input.chainRole);
+      let authorization = null;
+      if (isClinicalRole(input.role)) {
+        const walletAddress = input.walletProof
+          ? await verifiedStaffWallet({ fullName: member.fullName, email: member.email, role: input.role, chainRole, walletProof: input.walletProof })
+          : member.walletAddress;
+        if (!walletAddress) return res.status(400).json({ error: WALLET_REQUIRED });
+        authorization = {
+          walletAddress,
+          chainRole,
+          previousChainRole: member.chainRole && member.chainRole !== chainRole ? member.chainRole : null,
+          previousWalletAddress: member.walletAddress && member.walletAddress !== walletAddress ? member.walletAddress : null,
+          action: "grant"
+        };
+      } else if (member.chainRole && member.walletAddress) {
+        authorization = {
+          walletAddress: member.walletAddress,
+          chainRole: member.chainRole,
+          action: "revoke"
+        };
+      }
+      const user = await db.changeStaffRole({ userId: member.id, hospitalId: req.user.hospital_id, role: input.role, authorization });
+      res.json({ id: user.id, role: user.role, authorization: authorization ? { status: "pending", action: authorization.action, chainRole: authorization.chainRole, walletAddress: authorization.walletAddress } : null });
     } catch (error) { next(error); }
   });
 
@@ -347,7 +531,9 @@ function createApp({ db, blockchain, config }) {
     if (error.name === "ZodError") return res.status(400).json({ error: "Invalid request" });
     const publicError = error.code === "23505" && error.constraint === "users_email_key"
       ? Object.assign(new Error("A staff account with this email already exists."), { statusCode: 409 })
-      : error;
+      : error.code === "23505" && error.constraint === "staff_chain_authorizations_wallet_key"
+        ? Object.assign(new Error("This wallet is already linked to a staff account."), { statusCode: 409 })
+        : error;
     const publicStatus = [400, 401, 403, 404, 409].includes(publicError.statusCode) ? publicError.statusCode : publicError.statusCode === 503 ? 503 : 500;
     const publicMessage = publicStatus === 503 ? "Service unavailable" : publicStatus === 500 ? "Internal server error" : publicError.message;
     if (publicStatus >= 500) console.error("request failed");

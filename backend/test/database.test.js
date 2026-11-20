@@ -36,6 +36,7 @@ test("migration files are ordered and versioned by filename", async () => {
     "007_medical_records.sql",
     "008_access_audit.sql",
     "009_password_session.sql",
-    "010_registration_wallet_challenges.sql"
+    "010_registration_wallet_challenges.sql",
+    "011_staff_chain_authorization.sql"
   ]);
 });
