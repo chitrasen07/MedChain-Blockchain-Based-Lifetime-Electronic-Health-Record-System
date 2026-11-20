@@ -24,8 +24,15 @@ describe("patient ownership", () => {
     assert.equal(body.claimCommitment, commitment);
     assert.equal(Object.hasOwn(body, "secret"), false);
     assert.equal(Object.hasOwn(body, "recoveryCode"), false);
-    const wallet = validateOwnership({ mode: "wallet", controller: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" });
+    const unsigned = validateOwnership({ mode: "wallet", controller: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" });
+    assert.equal(unsigned.ownership, null);
+    const wallet = validateOwnership({
+      mode: "wallet",
+      controller: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      walletProof: { nonce: `0x${"11".repeat(32)}`, signature: "0xabc" },
+    });
     assert.equal(wallet.ownership.controller, "0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
+    assert.equal(Object.hasOwn(registrationBody({ fullName: "Synthetic Patient", dateOfBirth: "1990-01-01" }, "", wallet.ownership), "walletProof"), true);
     const unsaved = validateOwnership({ mode: "claim", claimCommitment: commitment, recoverySaved: false });
     assert.equal(unsaved.ownership, null);
     const walletAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";

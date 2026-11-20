@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
-import { claimBroadcastAllowed, claimCalldata, sendPatientClaim } from "../src/lib/claimChain.js";
+import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim } from "../src/lib/claimChain.js";
 import { anchorCalldata, emergencyRequestCalldata, grantCalldata, reasonHash, revokeCalldata, sendPreparedTransaction } from "../src/lib/consentChain.js";
 import { clinicalRequestBody } from "../src/services/clinicalService.js";
 
@@ -24,7 +24,7 @@ describe("clinical records and claims", () => {
     assert.equal(Object.hasOwn(body, "recoveryCode"), false);
   });
 
-  it("prepares claim calldata locally and refuses a public broadcast", async () => {
+  it("prepares claim calldata and sends a Sepolia claim only after an explicit request", async () => {
     const patientRef = `0x${"ab".repeat(32)}`;
     const value = `0x${"cd".repeat(32)}`;
     const iface = new Interface([
@@ -33,21 +33,57 @@ describe("clinical records and claims", () => {
     ]);
     assert.equal(claimCalldata("announce", patientRef, value), iface.encodeFunctionData("announceControllerClaim", [patientRef, value]));
     assert.equal(claimCalldata("reveal", patientRef, value), iface.encodeFunctionData("revealControllerClaim", [patientRef, value]));
-    assert.equal(claimBroadcastAllowed(11155111), false);
+    assert.equal(claimBroadcastAllowed(11155111), true);
     assert.equal(claimBroadcastAllowed(31337), true);
-    let requested = false;
+    assert.equal(claimBroadcastAllowed(1), false);
+    const calls = [];
+    const ethereum = {
+      async request({ method, params }) {
+        calls.push({ method, params });
+        if (method === "eth_chainId") return "0xaa36a7";
+        if (method === "eth_requestAccounts") return ["0x70997970C51812dc3A010C7d01b50e0d17dc79C8"];
+        if (method === "eth_sendTransaction") return `0x${"12".repeat(32)}`;
+        throw new Error(method);
+      },
+    };
+    const hash = await sendPatientClaim({
+      kind: "announce",
+      patientRef,
+      value,
+      chainId: 11155111,
+      ethereum,
+    });
+    assert.equal(hash, `0x${"12".repeat(32)}`);
+    assert.equal(calls.at(-1).method, "eth_sendTransaction");
+    assert.equal(calls.at(-1).params[0].to, "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806");
+    let blocked = false;
     await assert.rejects(
       () => sendPatientClaim({
         kind: "reveal",
         patientRef,
         value,
-        registryAddress: "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806",
-        chainId: 11155111,
-        ethereum: { request() { requested = true; } },
+        chainId: 1,
+        ethereum: { request() { blocked = true; } },
       }),
-      /not sent without approval/,
+      /Sepolia/,
     );
-    assert.equal(requested, false);
+    assert.equal(blocked, false);
+    const store = new Map();
+    globalThis.sessionStorage = {
+      setItem(key, stored) { store.set(key, stored); },
+      getItem(key) { return store.get(key) ?? null; },
+    };
+    saveClaimProgress({
+      patientId: "PATIENT-000001",
+      walletAddress: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      announcedAt: 10,
+      delaySeconds: 3600,
+      recoveryCode: `0x${"aa".repeat(32)}`,
+    });
+    const saved = [...store.values()].join("");
+    assert.equal(saved.includes("aa".repeat(32)), false);
+    assert.equal(loadClaimProgress().announcedAt, 10);
+    assert.equal(remainingClaimSeconds(10, 3600, 10_000), 3600);
   });
 
   it("prepares consent and emergency calldata without the clinical reason", async () => {

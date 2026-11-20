@@ -153,6 +153,15 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const stored = claimCommitmentFrom(record?.registrationController);
       if (!record?.did || !stored || !sameBytes32(stored, input.claimCommitment)) throw ownershipRejected();
       const controller = await readController(blockchain, record.did);
+      let claimDelaySeconds = CLAIM_DELAY_SECONDS;
+      if (typeof blockchain.getClaimDelay === "function") {
+        try {
+          const delay = await blockchain.getClaimDelay();
+          if (Number.isInteger(delay) && delay > 0) claimDelaySeconds = delay;
+        } catch {
+          throw chainUnavailable();
+        }
+      }
       if (controller !== ZERO_ADDRESS) {
         return res.json({
           status: "controller_set",
@@ -168,7 +177,7 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         walletAddress,
         commitmentMatches: true,
         onChainClaim: "not_submitted",
-        claimDelaySeconds: CLAIM_DELAY_SECONDS,
+        claimDelaySeconds,
         message: "The recovery code matches this unclaimed record. The claim transaction is not submitted."
       });
     } catch (error) { next(error); }

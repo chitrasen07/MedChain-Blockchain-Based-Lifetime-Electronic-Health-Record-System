@@ -227,6 +227,7 @@ export function PatientOwnershipPage() {
     const code = recoveryCode.trim();
     const patientRef = state.data?.patientRef;
     const value = kind === "announce" ? sealedClaim : code;
+    if (kind === "reveal" && !window.confirm("Revealing publishes the recovery code in the transaction. Continue only if you approve it in MetaMask.")) return;
     try {
       await sendPatientClaim({
         kind,
@@ -237,8 +238,8 @@ export function PatientOwnershipPage() {
         ethereum: globalThis.window?.ethereum,
       });
       setNotice(kind === "announce"
-        ? "The announcement was sent on the local network. Wait one hour before reveal."
-        : "The reveal was sent on the local network.");
+        ? "The announcement was submitted. Reveal stays locked until the contract waiting period ends."
+        : "The reveal was submitted. Sign in again after it is confirmed.");
       if (kind === "reveal") setRecoveryCode("");
     } catch (error) {
       setNotice(error?.message || "The claim was not sent.");
@@ -252,7 +253,7 @@ export function PatientOwnershipPage() {
         description="Confirm the controller wallet or prepare an unclaimed recovery locally. MedChain does not broadcast the claim."
       />
       <VerificationNotice>
-        Announce and reveal stay in this browser until a public transaction is approved. Reveal is rejected by the contract until one hour after the announcement.
+        Announce and reveal require MetaMask approval. Reveal is rejected by the contract until its waiting period ends.
       </VerificationNotice>
       {state.phase === "loading" ? <LoadingSkeleton label="Loading ownership" /> : null}
       {state.phase === "error" ? <ErrorState title="Ownership unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
@@ -295,9 +296,8 @@ export function PatientOwnershipPage() {
               </Button>
             </div>
             <p className="text-xs leading-5 text-muted">
-              The contract rejects a reveal until one hour after the announcement. Public networks stay disabled, so
-              these actions are not sent to Sepolia. A reveal includes the recovery secret only in a local transaction,
-              never in a hospital request.
+              The contract rejects a reveal until its waiting period ends. Sepolia and the local network both ask
+              MetaMask before sending. A reveal includes the recovery code in public transaction data, never in a hospital request.
             </p>
           </form>
         </Card>

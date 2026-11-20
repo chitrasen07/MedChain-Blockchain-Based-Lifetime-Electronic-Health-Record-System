@@ -8,6 +8,7 @@ const { encryptJson, decryptJson, fieldHash } = require("./crypto");
 const { issueToken, requireAuth } = require("./auth");
 const { registerPatientAuth } = require("./patientAuth");
 const { registerClinicalRecords } = require("./clinicalRecords");
+const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
 
 const profileSchema = z.object({
@@ -123,6 +124,18 @@ function createApp({ db, blockchain, config }) {
     } catch (error) { next(error); }
   });
 
+  app.post("/patient-registration/wallet-challenge", authRateLimit, staff, async (req, res, next) => {
+    try {
+      const walletAddress = getAddress(z.string().trim().regex(/^0x[0-9a-fA-F]{40}$/).parse(req.body?.walletAddress));
+      if (walletAddress === ZERO_ADDRESS) return res.status(400).json({ error: "A patient wallet is required." });
+      const nonce = `0x${crypto.randomBytes(32).toString("hex")}`;
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      const message = ["MedChain Patient Wallet Link", `Wallet: ${walletAddress}`, `Nonce: ${nonce}`, `Expires: ${expiresAt}`].join("\n");
+      await db.createRegistrationWalletChallenge({ walletAddress: walletAddress.toLowerCase(), nonce, message, expiresAt });
+      res.json({ nonce, message, expiresAt });
+    } catch (error) { next(error); }
+  });
+
   app.post("/patients/match", staff, async (req, res, next) => {
     try {
       const profile = profileSchema.parse(req.body);
@@ -212,6 +225,19 @@ function createApp({ db, blockchain, config }) {
             return res.status(409).json({ error: DUPLICATE_COMMITMENT_MESSAGE });
           }
           return res.status(202).json({ status: "registration_reconciliation_required" });
+        }
+        if (ownership.controller !== ZERO_ADDRESS && typeof db.consumeRegistrationWalletChallenge === "function") {
+          const nonce = typeof req.body?.walletProof?.nonce === "string" ? req.body.walletProof.nonce.trim().toLowerCase() : "";
+          const signature = typeof req.body?.walletProof?.signature === "string" ? req.body.walletProof.signature.trim() : "";
+          if (!/^0x[0-9a-f]{64}$/.test(nonce) || !/^0x[0-9a-f]+$/i.test(signature)) {
+            return res.status(400).json({ error: "The patient wallet must sign the link before registration." });
+          }
+          const challenge = await db.consumeRegistrationWalletChallenge(nonce);
+          let signer = "";
+          try { signer = getAddress(verifyMessage(challenge?.message || "", signature)).toLowerCase(); } catch { signer = ""; }
+          if (!challenge || signer !== ownership.controller.toLowerCase() || signer !== challenge.walletAddress) {
+            return res.status(400).json({ error: "The wallet signature could not be verified." });
+          }
         }
         let submitted;
         try {

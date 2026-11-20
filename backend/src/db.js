@@ -321,6 +321,19 @@ function createDb(config) {
       );
       return result.rows[0] || null;
     },
+    async createRegistrationWalletChallenge({ walletAddress, nonce, message, expiresAt }) {
+      await query(
+        "INSERT INTO registration_wallet_challenges (nonce, wallet_address, message, expires_at) VALUES ($1,$2,$3,$4)",
+        [nonce, walletAddress, message, expiresAt]
+      );
+    },
+    async consumeRegistrationWalletChallenge(nonce) {
+      const result = await query(
+        "UPDATE registration_wallet_challenges SET used_at = now() WHERE nonce = $1 AND used_at IS NULL AND expires_at > now() RETURNING wallet_address AS \"walletAddress\", message",
+        [nonce]
+      );
+      return result.rows[0] || null;
+    },
     async createPatientChallenge({ patientId, walletAddress, nonce, message, expiresAt }) {
       await query(
         "INSERT INTO patient_auth_challenges (patient_id, wallet_address, nonce, message, expires_at) VALUES ($1,$2,$3,$4,$5)",

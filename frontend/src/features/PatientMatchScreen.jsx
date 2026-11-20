@@ -3,10 +3,10 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { PageHeader } from "../components/PageHeader";
-import { Select } from "../components/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, messageForRequest } from "../lib/api";
 import { claimCommitmentForRecoveryCode, createRecoveryCode, sepoliaTransactionUrl } from "../lib/ownership";
+import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
 import { pageChrome } from "../lib/pageChrome";
 import { describeMatch, describeRegistration, emptyProfile, patientService, validateOwnership, validateProfile } from "../services/patientService";
 
@@ -71,6 +71,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [claimCommitment, setClaimCommitment] = useState("");
   const [recoverySaved, setRecoverySaved] = useState(false);
+  const [walletProof, setWalletProof] = useState(null);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
@@ -111,9 +112,38 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     setErrors((current) => ({ ...current, claimCommitment: undefined, recoverySaved: undefined }));
   }
 
+  async function connectWallet() {
+    setBusy("wallet");
+    setNotice("");
+    try {
+      setController(await connectPatientWallet());
+      setWalletProof(null);
+    } catch (error) {
+      setNotice(error?.code === 4001 ? "MetaMask did not approve the request." : error?.message || "The wallet could not be connected.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function signWalletLink() {
+    setBusy("sign");
+    setNotice("");
+    try {
+      const challenge = await patientService.walletChallenge(controller);
+      const signature = await signPatientLogin(challenge.message, controller);
+      setWalletProof({ nonce: challenge.nonce, signature });
+      setNotice("The patient signed the wallet link. Registration has not been sent.");
+    } catch (error) {
+      setWalletProof(null);
+      setNotice(error?.code === 4001 ? "MetaMask did not approve the signature." : requestMessage(error));
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function onRegister() {
     const parsed = validateProfile(profile, { reviewCase: true });
-    const ownership = validateOwnership({ mode: ownershipMode, controller, claimCommitment, recoverySaved });
+    const ownership = validateOwnership({ mode: ownershipMode, controller, claimCommitment, recoverySaved, walletProof });
     setErrors({ ...parsed.errors, ...ownership.errors });
     if (Object.keys(parsed.errors).length || Object.keys(ownership.errors).length || match?.status !== "no_match") return;
     setBusy("register");
@@ -179,20 +209,41 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
           </div>
           {canRegister ? (
             <div className="mt-5 border-t border-line pt-4">
-              <Select label="Patient ownership" name="ownershipMode" value={ownershipMode} onChange={(event) => setOwnershipMode(event.target.value)}>
-                <option value="claim">No wallet yet — recovery code</option>
-                <option value="wallet">Patient wallet address</option>
-              </Select>
+              <p className="text-sm font-medium text-ink">Choose one registration method</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Registration method">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={ownershipMode === "wallet"}
+                  className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "wallet" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
+                  onClick={() => setOwnershipMode("wallet")}
+                >
+                  <span className="block text-sm font-semibold text-navy">Register with wallet</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">The patient connects MetaMask and signs the link. Sign-in is available as soon as registration is confirmed, with no waiting period.</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={ownershipMode === "claim"}
+                  className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "claim" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
+                  onClick={() => setOwnershipMode("claim")}
+                >
+                  <span className="block text-sm font-semibold text-navy">Register without a wallet</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">Generate a recovery code for the patient. They connect a wallet later, announce a claim, wait one hour, and reveal it before sign-in.</span>
+                </button>
+              </div>
               {ownershipMode === "wallet" ? (
-                <Input
-                  className="mt-4"
-                  label="Patient wallet"
-                  name="controller"
-                  value={controller}
-                  error={errors.controller}
-                  hint="The patient controls this wallet. The hospital does not receive its key."
-                  onChange={(event) => setController(event.target.value.trim())}
-                />
+                <div className="mt-4">
+                  <p className="break-all text-sm leading-6 text-ink">{controller || "No wallet connected."}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">The patient signs a message in MetaMask. The hospital never receives the wallet key, and this patient can sign in without the claim wait.</p>
+                  {errors.controller ? <p className="mt-1.5 text-xs leading-5 text-danger">{errors.controller}</p> : null}
+                  {errors.walletProof ? <p className="mt-1.5 text-xs leading-5 text-danger">{errors.walletProof}</p> : null}
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <Button type="button" variant="secondary" onClick={connectWallet} loading={busy === "wallet"} disabled={Boolean(busy)}>Connect patient wallet</Button>
+                    <Button type="button" variant="secondary" onClick={signWalletLink} loading={busy === "sign"} disabled={Boolean(busy) || !controller}>Sign wallet link</Button>
+                  </div>
+                  {walletProof ? <p className="mt-2 text-xs leading-5 text-muted">Wallet link signed. It can be used once.</p> : null}
+                </div>
               ) : (
                 <div className="mt-4">
                   <div className="flex flex-col gap-2 sm:flex-row">

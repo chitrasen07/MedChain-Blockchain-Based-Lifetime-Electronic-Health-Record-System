@@ -59,9 +59,17 @@ export function validateOwnership(input = {}) {
   if (mode === "wallet") {
     const controller = String(input.controller || "").trim();
     if (!addressPattern.test(controller) || /^0x0{40}$/i.test(controller)) {
-      errors.controller = "Enter the patient's wallet address.";
+      errors.controller = "Connect the patient's wallet.";
     }
-    return { errors, ownership: errors.controller ? null : { controller } };
+    const nonce = String(input.walletProof?.nonce || "");
+    const signature = String(input.walletProof?.signature || "");
+    if (!bytes32Pattern.test(nonce) || !/^0x[0-9a-fA-F]+$/.test(signature)) {
+      errors.walletProof = "Ask the patient to sign the wallet link in MetaMask.";
+    }
+    return {
+      errors,
+      ownership: Object.keys(errors).length ? null : { controller, walletProof: { nonce, signature } },
+    };
   }
   const claimCommitment = String(input.claimCommitment || "").trim();
   if (!bytes32Pattern.test(claimCommitment) || /^0x0{64}$/i.test(claimCommitment)) {
@@ -75,6 +83,7 @@ export function registrationBody(profile, reviewCaseId, ownership) {
   const body = { ...profile };
   if (reviewCaseId) body.reviewCaseId = reviewCaseId;
   if (ownership?.controller) body.controller = ownership.controller;
+  if (ownership?.walletProof) body.walletProof = ownership.walletProof;
   if (ownership?.claimCommitment) body.claimCommitment = ownership.claimCommitment;
   delete body.secret;
   delete body.recoveryCode;
@@ -113,6 +122,9 @@ export function createPatientService(client = apiClient) {
   return {
     match(profile) {
       return client.request("/patients/match", { method: "POST", body: profile });
+    },
+    walletChallenge(walletAddress) {
+      return client.request("/patient-registration/wallet-challenge", { method: "POST", body: { walletAddress } });
     },
     register(profile, reviewCaseId, ownership) {
       return client.request("/patients", {

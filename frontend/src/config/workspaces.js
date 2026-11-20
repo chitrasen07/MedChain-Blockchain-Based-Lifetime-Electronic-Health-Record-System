@@ -137,7 +137,7 @@ export const pages = {
     eyebrow: "Hospital Admin",
     title: "Patient Registration",
     description:
-      "Check for a confirmed match in this hospital, then register only when the result is no match. A possible match stays off the chain until review.",
+      "Check for a confirmed match, then register with the patient's wallet or with a recovery code. A wallet link can sign in immediately. A recovery code uses the one-hour Sepolia claim.",
     kind: "table",
     columns: [
       { key: "patientId", header: "Patient ID" },

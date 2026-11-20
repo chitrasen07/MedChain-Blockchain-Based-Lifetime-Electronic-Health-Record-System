@@ -49,6 +49,8 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "Emergency access is in cooldown.",
   "Clinical wallet could not be verified.",
   "The current password was not accepted.",
+  "The patient wallet must sign the link before registration.",
+  "The wallet signature could not be verified.",
   "Choose a password that is different from the current password.",
   "Use at least 12 characters with a letter and a number.",
   "Too many password changes. Wait and try again.",

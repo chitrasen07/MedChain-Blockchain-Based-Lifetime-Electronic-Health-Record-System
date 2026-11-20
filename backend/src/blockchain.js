@@ -8,6 +8,7 @@ const ABI = [
   "function identityCommitmentExists(bytes32 identityCommitment) view returns (bool)",
   "function patientForCommitment(bytes32 identityCommitment) view returns (bytes32)",
   "function getController(bytes32 patientRef) view returns (address)",
+  "function CLAIM_DELAY() view returns (uint256)",
   "error IdentityCommitmentAlreadyExists()",
   "event PatientRegistered(bytes32 indexed patientRef,bytes32 indexed identityCommitment,address controller,uint256 registeredAt)"
 ];
@@ -108,6 +109,9 @@ const provider = new JsonRpcProvider(request);
     },
     async getController(patientRef) {
       return reader.getController(patientRef);
+    },
+    async getClaimDelay() {
+      return Number(await contract.CLAIM_DELAY());
     },
     async verifySigner() {
       const registry = new Contract(config.registryAddress, [...ABI, ...ROLE_ABI], provider);

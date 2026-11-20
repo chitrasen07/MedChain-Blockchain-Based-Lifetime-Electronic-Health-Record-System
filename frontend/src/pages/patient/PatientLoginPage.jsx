@@ -6,10 +6,9 @@ import { Input } from "../../components/Input";
 import { useAuth } from "../../context/useAuth";
 import { ApiError } from "../../lib/api";
 import { connectPatientWallet, signPatientLogin } from "../../lib/patientWallet";
-import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode } from "../../lib/ownership";
+import { OwnershipClaimPanel } from "../../features/OwnershipClaimPanel";
 import { homeForRole } from "../../lib/roles";
-import { claimStatusBody, patientAuthMessage } from "../../services/patientPortal";
-import { apiClient } from "../../lib/api";
+import { patientAuthMessage } from "../../services/patientPortal";
 
 const patientIdPattern = /^PATIENT-[0-9]{1,12}$/;
 
@@ -18,12 +17,8 @@ export function PatientLoginPage() {
   const { loginPatient, isAuthenticated, user } = useAuth();
   const [patientId, setPatientId] = useState("");
   const [walletAddress, setWalletAddress] = useState("");
-  const [recoveryCode, setRecoveryCode] = useState("");
   const [notice, setNotice] = useState("");
-  const [claimNotice, setClaimNotice] = useState("");
-  const [sealedClaim, setSealedClaim] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     document.title = "Patient login · MedChain";
@@ -70,44 +65,6 @@ export function PatientLoginPage() {
     }
   }
 
-  async function handleClaimCheck(event) {
-    event.preventDefault();
-    setClaimNotice("");
-    setSealedClaim("");
-    const id = patientId.trim().toUpperCase();
-    const code = recoveryCode.trim();
-    if (!patientIdPattern.test(id)) {
-      setClaimNotice("Enter a lifetime patient ID such as PATIENT-000001.");
-      return;
-    }
-    if (!/^0x[0-9a-fA-F]{40}$/.test(walletAddress)) {
-      setClaimNotice("Connect the wallet that should become the controller.");
-      return;
-    }
-    const claimCommitment = claimCommitmentForRecoveryCode(code);
-    if (!claimCommitment) {
-      setClaimNotice("Enter the recovery code saved at registration. It stays in this browser.");
-      return;
-    }
-    setRecoveryCode("");
-    setChecking(true);
-    try {
-      const result = await apiClient.request("/patient-auth/claim-status", {
-        method: "POST",
-        body: claimStatusBody({ patientId: id, walletAddress, claimCommitment }),
-        authenticated: false,
-      });
-      if (result?.status === "unclaimed" && result.patientRef) {
-        setSealedClaim(sealedClaimForRecoveryCode(code, walletAddress, result.patientRef));
-      }
-      setClaimNotice(result?.message || "The ownership check finished. No transaction was sent.");
-    } catch (error) {
-      setClaimNotice(patientAuthMessage(error instanceof ApiError ? error : error));
-    } finally {
-      setChecking(false);
-    }
-  }
-
   return (
     <div className="grid min-h-screen lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <section className="hidden flex-col justify-between bg-navy-deep px-10 py-10 text-white lg:flex xl:px-14">
@@ -116,8 +73,8 @@ export function PatientLoginPage() {
           <p className="text-[11px] font-medium tracking-[0.14em] text-teal uppercase">Patient access</p>
           <p className="mt-3 text-3xl font-semibold tracking-tight">Sign in with the wallet that controls your record.</p>
           <p className="mt-4 text-sm leading-7 text-white/70">
-            MedChain asks the wallet to sign a one-time challenge. The signature is checked against the Sepolia
-            controller. This page does not send a transaction, and it does not accept a recovery secret on the server.
+            MedChain asks the wallet to sign a one-time challenge. An unclaimed record can be claimed on Sepolia
+            from this page. Each claim transaction needs MetaMask approval, and the recovery code is not sent to the hospital.
           </p>
         </div>
         <p className="text-xs leading-5 text-white/55">
@@ -140,8 +97,7 @@ export function PatientLoginPage() {
             <form className="rounded-xl border border-line bg-surface px-5 py-6 shadow-[0_1px_2px_rgba(13,33,56,0.04)] sm:px-7 sm:py-8" onSubmit={handleSignIn} noValidate>
               <h1 className="text-2xl font-semibold tracking-tight text-navy">Patient sign-in</h1>
               <p className="mt-2 text-sm leading-6 text-muted">
-                Use the lifetime patient ID and the controller wallet. A record without a wallet can be checked below,
-                but the chain claim is not submitted.
+                A wallet linked during registration can sign in now. A record created with a recovery code uses the claim below: check the code, announce, wait one hour, reveal, then sign in.
               </p>
               <div className="mt-7 space-y-4">
                 <Input
@@ -170,37 +126,7 @@ export function PatientLoginPage() {
               </div>
             </form>
 
-            <form className="rounded-xl border border-line bg-surface px-5 py-6 sm:px-7" onSubmit={handleClaimCheck} noValidate>
-              <h2 className="text-base font-semibold text-navy">Ownership claim</h2>
-              <p className="mt-2 text-sm leading-6 text-muted">
-                The recovery code is used only in this browser to build the claim commitment. It is removed from the
-                page before the check is sent.
-              </p>
-              <div className="mt-4 space-y-4">
-                <Input
-                  label="Recovery code"
-                  type="password"
-                  name="recoveryCode"
-                  autoComplete="off"
-                  value={recoveryCode}
-                  onChange={(event) => setRecoveryCode(event.target.value)}
-                  hint="Not sent to the hospital service."
-                />
-                {claimNotice ? (
-                  <p role="status" className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">
-                    {claimNotice}
-                  </p>
-                ) : null}
-                {sealedClaim ? (
-                  <p className="break-all text-xs leading-5 text-muted">
-                    Sealed claim prepared in this browser: {sealedClaim}. It was not sent to Sepolia.
-                  </p>
-                ) : null}
-                <Button type="submit" variant="secondary" className="w-full" loading={checking} disabled={checking}>
-                  Check recovery code
-                </Button>
-              </div>
-            </form>
+            <OwnershipClaimPanel patientId={patientId} walletAddress={walletAddress} />
             <p className="text-center text-sm text-muted">
               Hospital staff use{" "}
               <Link to="/login" className="font-medium text-teal hover:text-teal-dark">
