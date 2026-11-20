@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const request = require("supertest");
 const { createApp } = require("../src/app");
-const { createBlockchainAdapter } = require("../src/blockchain");
+const { createBlockchainAdapter, duplicateCommitmentConflict } = require("../src/blockchain");
 const { createRuntime } = require("../src/server");
 const { issueToken } = require("../src/auth");
 
@@ -41,6 +41,7 @@ function setup(blockchainEnabled, match = { status: "no_match", candidates: [], 
     identityCommitment() { calls.push("identityCommitment"); return "0x" + "11".repeat(32); },
     async submitRegistration() { calls.push("submitRegistration"); return { txHash: "0xtx1" }; },
     async commitmentExists() { calls.push("commitmentExists"); return false; },
+    async verifySigner() { calls.push("verifySigner"); return { isHospitalAdmin: true }; },
     async reconcileRegistration() { calls.push("reconcileRegistration"); }
   };
   const app = createApp({
@@ -65,16 +66,16 @@ test("disabled mode does not require blockchain configuration or retain a signin
   assert.equal(config.rpcUrl, undefined);
   assert.equal(config.registryAddress, undefined);
   assert.equal(config.privateKey, undefined);
-  assert.equal(config.controllerAddress, undefined);
+  assert.equal(config.thirdwebSecretKey, undefined);
 });
 
 test("enabled mode requires the blockchain configuration and keeps it", () => {
-  assert.throws(() => createRuntime(baseEnv), /CONTROLLER_ADDRESS is required/);
+  assert.throws(() => createRuntime(baseEnv), /RPC_URL is required/);
   assert.throws(() => createRuntime({
     ...baseEnv,
     BLOCKCHAIN_ENABLED: "true",
-    CONTROLLER_ADDRESS: "0x0000000000000000000000000000000000000001"
-  }), /RPC_URL is required/);
+    RPC_URL: "http://127.0.0.1:8545"
+  }), /PATIENT_REGISTRY_ADDRESS is required/);
   assert.throws(() => createRuntime({ ...baseEnv, BLOCKCHAIN_ENABLED: "sometimes" }), /BLOCKCHAIN_ENABLED must be true or false/);
   const config = createRuntime({
     ...baseEnv,
@@ -82,13 +83,14 @@ test("enabled mode requires the blockchain configuration and keeps it", () => {
     RPC_URL: "http://127.0.0.1:8545",
     PATIENT_REGISTRY_ADDRESS: "0x0000000000000000000000000000000000000002",
     BLOCKCHAIN_PRIVATE_KEY: "0x" + "ab".repeat(32),
-    CONTROLLER_ADDRESS: "0x0000000000000000000000000000000000000001"
+    THIRDWEB_SECRET_KEY: "synthetic-thirdweb-secret"
   });
   assert.equal(config.blockchainEnabled, true);
   assert.equal(config.rpcUrl, "http://127.0.0.1:8545");
   assert.equal(config.registryAddress, "0x0000000000000000000000000000000000000002");
-  assert.equal(config.controllerAddress, "0x0000000000000000000000000000000000000001");
+  assert.equal(config.thirdwebSecretKey, "synthetic-thirdweb-secret");
   assert.equal(config.privateKey, "0x" + "ab".repeat(32));
+  assert.equal(Object.hasOwn(config, "controllerAddress"), false);
 });
 
 test("a disabled adapter does not construct a wallet and rejects chain calls", async () => {
@@ -101,7 +103,14 @@ test("a disabled adapter does not construct a wallet and rejects chain calls", a
   assert.equal(adapter.enabled, false);
   await assert.rejects(() => adapter.submitRegistration("0x1", "0x" + "11".repeat(32)), /Blockchain registration is unavailable/);
   await assert.rejects(() => adapter.verifySigner(), /Blockchain registration is unavailable/);
+  await assert.rejects(() => adapter.getController("0x" + "11".repeat(32)), /Blockchain registration is unavailable/);
   assert.throws(() => adapter.identityCommitment("value", "secret"), /Blockchain registration is unavailable/);
+});
+
+test("a duplicate commitment conflict is distinct from an indeterminate submission error", () => {
+  assert.equal(duplicateCommitmentConflict({ revert: { name: "IdentityCommitmentAlreadyExists" } }), true);
+  assert.equal(duplicateCommitmentConflict({ data: "0x1234" }), false);
+  assert.equal(duplicateCommitmentConflict(new Error("socket hang up")), false);
 });
 
 test("an enabled adapter without credentials fails instead of returning a stub", () => {
@@ -165,10 +174,21 @@ test("disabled mode rejects the review decision that starts registration", async
   assert.deepEqual(calls, ["resolveReviewCase"]);
 });
 
-test("enabled mode still submits a registration", async () => {
+test("enabled mode still submits a registration for the supplied patient controller", async () => {
   const { app, calls } = setup(true);
-  const response = await request(app).post("/patients").set("Authorization", auth(admin)).send(profile);
+  const response = await request(app).post("/patients").set("Authorization", auth(admin)).send({
+    ...profile,
+    controller: "0x0000000000000000000000000000000000000001"
+  });
   assert.equal(response.status, 202);
   assert.equal(response.body.status, "registration_submitted");
-  assert.deepEqual(calls, ["identityCommitment", "getPendingRegistrationByCommitment", "createPendingPatient", "beginRegistration", "commitmentExists", "submitRegistration", "markRegistrationSubmitted"]);
+  assert.deepEqual(calls, ["identityCommitment", "verifySigner", "getPendingRegistrationByCommitment", "createPendingPatient", "beginRegistration", "commitmentExists", "submitRegistration", "markRegistrationSubmitted"]);
+});
+
+test("enabled registration does not invent a shared controller", async () => {
+  const { app, calls } = setup(true);
+  const response = await request(app).post("/patients").set("Authorization", auth(admin)).send(profile);
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "A patient controller or an ownership claim commitment is required.");
+  assert.deepEqual(calls, []);
 });

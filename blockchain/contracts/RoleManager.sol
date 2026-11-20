@@ -5,6 +5,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /// @title RoleManager
 /// @notice Hospital role registry built on OpenZeppelin AccessControl.
+/// @dev These chain roles are not the application roles used by the API.
 contract RoleManager is AccessControl {
     bytes32 public constant PATIENT_ROLE = keccak256("PATIENT");
     bytes32 public constant DOCTOR_ROLE = keccak256("DOCTOR");
@@ -16,10 +17,13 @@ contract RoleManager is AccessControl {
     bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR");
     bytes32 public constant SUPER_ADMIN_ROLE = keccak256("SUPER_ADMIN");
 
+    uint256 public superAdminCount;
+
     event RoleAssigned(bytes32 indexed role, address indexed account, address indexed assignedBy);
 
     error Unauthorized();
     error ZeroAddress();
+    error LastSuperAdmin();
 
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -48,7 +52,6 @@ contract RoleManager is AccessControl {
         if (account == address(0)) revert ZeroAddress();
         if (!_canManageRole(role, msg.sender)) revert Unauthorized();
         _revokeRole(role, account);
-        emit RoleRevoked(role, account, msg.sender);
     }
 
     function isHospitalAdmin(address account) public view returns (bool) {
@@ -66,13 +69,24 @@ contract RoleManager is AccessControl {
             || hasRole(NURSE_ROLE, account);
     }
 
+    function _grantRole(bytes32 role, address account) internal override returns (bool) {
+        bool granted = super._grantRole(role, account);
+        if (granted && role == SUPER_ADMIN_ROLE) superAdminCount++;
+        return granted;
+    }
+
+    function _revokeRole(bytes32 role, address account) internal override returns (bool) {
+        if (role == SUPER_ADMIN_ROLE && hasRole(role, account) && superAdminCount <= 1) {
+            revert LastSuperAdmin();
+        }
+        bool revoked = super._revokeRole(role, account);
+        if (revoked && role == SUPER_ADMIN_ROLE) superAdminCount--;
+        return revoked;
+    }
+
     function _canManageRole(bytes32 role, address account) internal view returns (bool) {
-        if (hasRole(SUPER_ADMIN_ROLE, account)) {
-            return true;
-        }
-        if (!hasRole(HOSPITAL_ADMIN_ROLE, account)) {
-            return false;
-        }
+        if (hasRole(SUPER_ADMIN_ROLE, account)) return true;
+        if (!hasRole(HOSPITAL_ADMIN_ROLE, account)) return false;
         return role == PATIENT_ROLE || role == DOCTOR_ROLE || role == NURSE_ROLE
             || role == LAB_TECHNICIAN_ROLE || role == PHARMACIST_ROLE || role == SPECIALIST_ROLE;
     }

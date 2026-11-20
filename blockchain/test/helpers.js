@@ -1,4 +1,3 @@
-const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
 async function deploySystem() {
@@ -46,13 +45,7 @@ async function deploySystem() {
   );
   await medicalRecords.waitForDeployment();
 
-  const loggers = [
-    patientRegistry,
-    recordAccess,
-    emergencyAccess,
-    medicalRecords
-  ];
-  for (const logger of loggers) {
+  for (const logger of [patientRegistry, recordAccess, emergencyAccess, medicalRecords]) {
     await auditLog.setAuthorizedLogger(await logger.getAddress(), true);
   }
 
@@ -80,28 +73,66 @@ async function deploySystem() {
   };
 }
 
-async function registerSamplePatient(ctx) {
-  const tx = await ctx.patientRegistry
-    .connect(ctx.hospitalAdmin)
-    .registerPatient(ctx.patient.address);
-
-  const receipt = await tx.wait();
-
-  const event = receipt.logs
-    .map((log) => {
-      try {
-        return ctx.patientRegistry.interface.parseLog(log);
-      } catch {
-        return null;
-      }
-    })
-    .find((parsed) => parsed && parsed.name === "PatientRegistered");
-
-  if (!event) {
-    throw new Error("PatientRegistered event not found");
-  }
-
-  return event.args.patientId;
+function commitmentFor(patientRef, label) {
+  return ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "string"], [patientRef, label]));
 }
 
-module.exports = { deploySystem, registerSamplePatient };
+async function registerSamplePatient(ctx, controller = ctx.patient.address) {
+  const patientRef = ethers.hexlify(ethers.randomBytes(32));
+  const identityCommitment = commitmentFor(patientRef, `identity-${controller}`);
+  await ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(
+    patientRef,
+    controller,
+    identityCommitment,
+    ethers.ZeroHash
+  );
+  return patientRef;
+}
+
+function claimCommitment(secret) {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["bytes32", "bytes32"],
+      [secret, ethers.keccak256(ethers.toUtf8Bytes("MedChain.claim.v1"))]
+    )
+  );
+}
+
+function sealedClaim(claimant, secret, patientRef) {
+  const domain = ethers.keccak256(ethers.toUtf8Bytes("MedChain.claim.v1"));
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["address", "bytes32", "bytes32", "bytes32"],
+      [claimant, secret, patientRef, domain]
+    )
+  );
+}
+
+function recoveryCommitment(secret) {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["bytes32", "bytes32"],
+      [secret, ethers.keccak256(ethers.toUtf8Bytes("MedChain.recovery.v1"))]
+    )
+  );
+}
+
+function sealedRecovery(claimant, secret, patientRef) {
+  const domain = ethers.keccak256(ethers.toUtf8Bytes("MedChain.recovery.v1"));
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["address", "bytes32", "bytes32", "bytes32"],
+      [claimant, secret, patientRef, domain]
+    )
+  );
+}
+
+module.exports = {
+  deploySystem,
+  registerSamplePatient,
+  commitmentFor,
+  claimCommitment,
+  sealedClaim,
+  recoveryCommitment,
+  sealedRecovery
+};

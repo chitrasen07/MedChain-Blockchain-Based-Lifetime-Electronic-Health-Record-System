@@ -1,144 +1,120 @@
-
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-toolbox/network-helpers");
-const { deploySystem, registerSamplePatient } = require("./helpers");
+const { deploySystem, registerSamplePatient, commitmentFor } = require("./helpers");
 
 describe("PatientRegistry", function () {
   async function fixture() {
     return deploySystem();
   }
 
-  it("generates sequential patient IDs automatically", async function () {
+  it("registers opaque references instead of sequential identifiers", async function () {
     const ctx = await loadFixture(fixture);
+    const first = await registerSamplePatient(ctx);
+    const second = await registerSamplePatient(ctx);
 
-    const firstId = await registerSamplePatient(ctx);
-    const secondId = await registerSamplePatient(ctx);
-    const thirdId = await registerSamplePatient(ctx);
-
-    expect(firstId).to.equal("PATIENT-000001");
-    expect(secondId).to.equal("PATIENT-000002");
-    expect(thirdId).to.equal("PATIENT-000003");
+    expect(first).to.match(/^0x[0-9a-f]{64}$/);
+    expect(second).to.not.equal(first);
+    expect(first).to.not.match(/PATIENT-/);
+    expect(ctx.patientRegistry.interface.fragments.map((item) => item.name)).to.not.include("nextPatientNumber");
   });
 
-  it("registers a patient and stores their identity references", async function () {
+  it("stores a controller without a public personal identifier", async function () {
     const ctx = await loadFixture(fixture);
-    const patientId = await registerSamplePatient(ctx);
+    const patientRef = await registerSamplePatient(ctx);
+    const result = await ctx.patientRegistry.getPatient(patientRef);
 
-    await expect(ctx.patientRegistry.patientExists(patientId))
-      .to.eventually.equal(true);
-
-    const result = await ctx.patientRegistry.getPatient(patientId);
-
-    expect(result.id).to.equal(patientId);
-    expect(result.did).to.match(/^did:medchain:0x[0-9a-f]{64}$/);
     expect(result.controller).to.equal(ctx.patient.address);
     expect(result.active).to.equal(true);
     expect(result.registeredAt).to.be.gt(0);
-  });
-
-  it("generates unique DIDs", async function () {
-    const ctx = await loadFixture(fixture);
-
-    const firstId = await registerSamplePatient(ctx);
-    const secondId = await registerSamplePatient(ctx);
-    const first = await ctx.patientRegistry.getPatient(firstId);
-    const second = await ctx.patientRegistry.getPatient(secondId);
-
-    expect(first.did).to.not.equal(second.did);
+    expect(result).to.not.have.property("did");
   });
 
   it("rejects registration by unauthorized users", async function () {
     const ctx = await loadFixture(fixture);
+    const patientRef = ethers.hexlify(ethers.randomBytes(32));
 
     await expect(
-      ctx.patientRegistry
-        .connect(ctx.doctor)
-        .registerPatient(ctx.patient.address)
-    ).to.be.revertedWithCustomError(ctx.patientRegistry, "Unauthorized");
-
-    await expect(
-      ctx.patientRegistry
-        .connect(ctx.stranger)
-        .registerPatient(ctx.patient.address)
+      ctx.patientRegistry.connect(ctx.doctor).registerPatient(
+        patientRef,
+        ctx.patient.address,
+        commitmentFor(patientRef, "identity"),
+        ethers.ZeroHash
+      )
     ).to.be.revertedWithCustomError(ctx.patientRegistry, "Unauthorized");
   });
 
-  it("looks up a registered patient by generated ID", async function () {
+  it("rejects a registration without an identity commitment", async function () {
     const ctx = await loadFixture(fixture);
-    const patientId = await registerSamplePatient(ctx);
+    const patientRef = ethers.hexlify(ethers.randomBytes(32));
 
-    expect(await ctx.patientRegistry.patientExists(patientId)).to.equal(true);
-    expect(await ctx.patientRegistry.patientExists("PATIENT-999999")).to.equal(false);
-    expect(await ctx.patientRegistry.getController(patientId)).to.equal(
-      ctx.patient.address
+    await expect(
+      ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(
+        patientRef,
+        ctx.patient.address,
+        ethers.ZeroHash,
+        ethers.ZeroHash
+      )
+    ).to.be.revertedWithCustomError(ctx.patientRegistry, "InvalidIdentifier");
+    expect(ctx.patientRegistry.interface.fragments.map((item) => item.name)).to.not.include(
+      "registerPatientWithIdentityCommitment"
     );
+  });
+
+  it("binds a commitment to one opaque patient reference", async function () {
+    const ctx = await loadFixture(fixture);
+    const patientRef = ethers.hexlify(ethers.randomBytes(32));
+    const identityCommitment = commitmentFor(patientRef, "identity");
+    await ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(
+      patientRef,
+      ctx.patient.address,
+      identityCommitment,
+      ethers.ZeroHash
+    );
+
+    expect(await ctx.patientRegistry.identityCommitmentExists(identityCommitment)).to.equal(true);
+    expect(await ctx.patientRegistry.patientForCommitment(identityCommitment)).to.equal(patientRef);
+    await expect(
+      ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(
+        ethers.hexlify(ethers.randomBytes(32)),
+        ctx.extra.address,
+        identityCommitment,
+        ethers.ZeroHash
+      )
+    ).to.be.revertedWithCustomError(ctx.patientRegistry, "IdentityCommitmentAlreadyExists");
   });
 
   it("deactivates a patient when authorized", async function () {
     const ctx = await loadFixture(fixture);
-    const patientId = await registerSamplePatient(ctx);
+    const patientRef = await registerSamplePatient(ctx);
 
-    await expect(
-      ctx.patientRegistry
-        .connect(ctx.hospitalAdmin)
-        .deactivatePatient(patientId)
-    ).to.emit(ctx.patientRegistry, "PatientDeactivated");
-
-    const result = await ctx.patientRegistry.getPatient(patientId);
-    expect(result.active).to.equal(false);
+    await expect(ctx.patientRegistry.connect(ctx.hospitalAdmin).deactivatePatient(patientRef))
+      .to.emit(ctx.patientRegistry, "PatientDeactivated");
+    expect((await ctx.patientRegistry.getPatient(patientRef)).active).to.equal(false);
   });
 
-  it("rejects unauthorized deactivation", async function () {
+  it("rejects unauthorized or repeated deactivation", async function () {
     const ctx = await loadFixture(fixture);
-    const patientId = await registerSamplePatient(ctx);
+    const patientRef = await registerSamplePatient(ctx);
 
-    await expect(
-      ctx.patientRegistry
-        .connect(ctx.stranger)
-        .deactivatePatient(patientId)
-    ).to.be.revertedWithCustomError(ctx.patientRegistry, "Unauthorized");
+    await expect(ctx.patientRegistry.connect(ctx.stranger).deactivatePatient(patientRef))
+      .to.be.revertedWithCustomError(ctx.patientRegistry, "Unauthorized");
+    await ctx.patientRegistry.connect(ctx.hospitalAdmin).deactivatePatient(patientRef);
+    await expect(ctx.patientRegistry.connect(ctx.hospitalAdmin).deactivatePatient(patientRef))
+      .to.be.revertedWithCustomError(ctx.patientRegistry, "PatientInactive");
   });
 
-  it("rejects deactivation of an already inactive patient", async function () {
+  it("rejects both a controller and a claim commitment", async function () {
     const ctx = await loadFixture(fixture);
-    const patientId = await registerSamplePatient(ctx);
-
-    await ctx.patientRegistry
-      .connect(ctx.hospitalAdmin)
-      .deactivatePatient(patientId);
+    const patientRef = ethers.hexlify(ethers.randomBytes(32));
 
     await expect(
-      ctx.patientRegistry
-        .connect(ctx.hospitalAdmin)
-        .deactivatePatient(patientId)
-    ).to.be.revertedWithCustomError(ctx.patientRegistry, "PatientInactive");
-  });
-
-  it("rejects zero controllers", async function () {
-    const ctx = await loadFixture(fixture);
-
-    await expect(
-      ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(ethers.ZeroAddress)
-    ).to.be.revertedWithCustomError(ctx.patientRegistry, "ZeroAddress");
-
-    expect(await ctx.patientRegistry.nextPatientNumber()).to.equal(1);
-    expect(await registerSamplePatient(ctx)).to.equal("PATIENT-000001");
-  });
-
-  it("rejects duplicate identity commitments", async function () {
-    const ctx = await loadFixture(fixture);
-    const commitment = ethers.keccak256(ethers.toUtf8Bytes("mock identity service commitment"));
-
-    await ctx.patientRegistry
-      .connect(ctx.hospitalAdmin)
-      .registerPatientWithIdentityCommitment(ctx.patient.address, commitment);
-
-    expect(await ctx.patientRegistry.identityCommitmentExists(commitment)).to.equal(true);
-    await expect(
-      ctx.patientRegistry
-        .connect(ctx.hospitalAdmin)
-        .registerPatientWithIdentityCommitment(ctx.extra.address, commitment)
-    ).to.be.revertedWithCustomError(ctx.patientRegistry, "IdentityCommitmentAlreadyExists");
+      ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(
+        patientRef,
+        ctx.patient.address,
+        commitmentFor(patientRef, "identity"),
+        ethers.hexlify(ethers.randomBytes(32))
+      )
+    ).to.be.revertedWithCustomError(ctx.patientRegistry, "InvalidOwnership");
   });
 });

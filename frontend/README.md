@@ -1,14 +1,14 @@
 # MedChain frontend
 
-Hospital interface for MedChain. This phase is the visual foundation only.
-
-Clinical data is not shown. Sign-in does not call the API. Workspace routes are layout shells, not authenticated sessions. There is no role switcher.
+Staff interface for MedChain. Sign-in calls `POST /auth/token`. Each role is
+limited to its own workspace.
 
 ## Run
 
 ```bash
 cd frontend
 npm install
+npm test
 npm run dev
 ```
 
@@ -17,13 +17,13 @@ Open `http://localhost:5173`.
 Production build:
 
 ```bash
+npm run lint
 npm run build
-npm run preview
 ```
 
 ## Configuration
 
-Copy `.env.example` to `.env` when a later phase connects the API.
+Copy `.env.example` to `.env`.
 
 ```text
 VITE_API_URL=http://localhost:3000
@@ -36,14 +36,17 @@ Do not put backend secrets, private keys, or database credentials in this folder
 | Path | What it is |
 | --- | --- |
 | `/` | Welcome |
-| `/login` | Staff login form. It does not sign anyone in. |
-| `/unauthorized` | Access message. Role checks are not active. |
-| `/admin` | Hospital Admin shell |
-| `/doctor` | Doctor shell |
-| `/receptionist` | Receptionist shell |
-| `/staff` | Hospital Staff shell |
-| `/reviewer` | Reviewer shell |
-| `/patient` | Future patient shell. Backend role does not exist. |
-| `/emergency` | Future emergency shell. Backend role does not exist. |
+| `/login` | Staff sign-in |
+| `/unauthorized` | Role restriction |
+| `/admin` | Hospital administration, including patient registration |
+| `/doctor` | Doctor workspace |
+| `/receptionist` | Reception workspace |
+| `/staff` | Hospital staff workspace |
+| `/reviewer` | Review workspace |
+| `/patient/login` | Patient wallet sign-in and recovery-code check |
+| `/patient` | Patient dashboard, identity, ownership, visits, and profile |
+| `/emergency` | Placeholder. The API has no emergency-staff login. |
 
-Navigation inside each shell matches the current backend responsibilities. Patient and emergency pages state that backend integration is pending.
+Registration accepts either a patient wallet address or a recovery code
+generated in the browser. The recovery secret is not included in the API
+request. A confirmed registration links to Sepolia Etherscan.

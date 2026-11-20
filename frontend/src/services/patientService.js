@@ -50,6 +50,39 @@ export function describeMatch(result) {
   return "The match result could not be read.";
 }
 
+const addressPattern = /^0x[0-9a-fA-F]{40}$/;
+const bytes32Pattern = /^0x[0-9a-fA-F]{64}$/;
+
+export function validateOwnership(input = {}) {
+  const errors = {};
+  const mode = input.mode === "wallet" ? "wallet" : "claim";
+  if (mode === "wallet") {
+    const controller = String(input.controller || "").trim();
+    if (!addressPattern.test(controller) || /^0x0{40}$/i.test(controller)) {
+      errors.controller = "Enter the patient's wallet address.";
+    }
+    return { errors, ownership: errors.controller ? null : { controller } };
+  }
+  const claimCommitment = String(input.claimCommitment || "").trim();
+  if (!bytes32Pattern.test(claimCommitment) || /^0x0{64}$/i.test(claimCommitment)) {
+    errors.claimCommitment = "Generate a recovery code before registering.";
+  }
+  if (!input.recoverySaved) errors.recoverySaved = "Save the recovery code with the patient before registering.";
+  return { errors, ownership: Object.keys(errors).length ? null : { claimCommitment } };
+}
+
+export function registrationBody(profile, reviewCaseId, ownership) {
+  const body = { ...profile };
+  if (reviewCaseId) body.reviewCaseId = reviewCaseId;
+  if (ownership?.controller) body.controller = ownership.controller;
+  if (ownership?.claimCommitment) body.claimCommitment = ownership.claimCommitment;
+  delete body.secret;
+  delete body.recoveryCode;
+  delete body.mode;
+  delete body.recoverySaved;
+  return body;
+}
+
 export function describeRegistration(result, error) {
   if (error?.resultStatus === "registration_failed") {
     return "The registration failed. It is not confirmed on the chain.";
@@ -59,7 +92,7 @@ export function describeRegistration(result, error) {
     return `This profile matches an existing patient${result.patientId ? ` (${result.patientId})` : ""}. No new registration was created.`;
   }
   if (result.status === "confirmed" || (result.patientId && result.did && !result.status)) {
-    return `Registration is confirmed. Patient ID ${result.patientId}. DID ${result.did}.`;
+    return `Registration is confirmed. Lifetime patient ID ${result.patientId}.`;
   }
   if (result.status === "review_required") {
     return "Registration stopped for manual review. Nothing was confirmed on the chain.";
@@ -81,10 +114,10 @@ export function createPatientService(client = apiClient) {
     match(profile) {
       return client.request("/patients/match", { method: "POST", body: profile });
     },
-    register(profile, reviewCaseId) {
+    register(profile, reviewCaseId, ownership) {
       return client.request("/patients", {
         method: "POST",
-        body: reviewCaseId ? { ...profile, reviewCaseId } : profile,
+        body: registrationBody(profile, reviewCaseId, ownership),
       });
     },
     get(patientId) {

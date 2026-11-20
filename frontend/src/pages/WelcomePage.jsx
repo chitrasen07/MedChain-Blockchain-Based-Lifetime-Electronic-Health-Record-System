@@ -49,6 +49,9 @@ export function WelcomePage() {
             <a href="#integrity" className="hidden rounded-md px-2 py-2 text-sm font-medium text-ink hover:text-navy md:inline">
               Integrity
             </a>
+            <Link to="/patient/login" className="hidden rounded-md px-2 py-2 text-sm font-medium text-ink hover:text-navy sm:inline">
+              Patient
+            </Link>
             <Button to="/login" size="sm" className="shrink-0">
               <span className="sm:hidden">Login</span>
               <span className="hidden sm:inline">Staff login</span>
@@ -147,11 +150,17 @@ export function WelcomePage() {
                 <p className="mt-1 text-sm leading-6 text-muted">{role.detail}</p>
               </article>
             ))}
-            <article className="rounded-xl border border-dashed border-line bg-canvas px-5 py-4 md:col-span-2">
-              <h3 className="text-sm font-semibold tracking-tight text-navy">Patient and emergency access</h3>
+            <article className="rounded-xl border border-line bg-surface px-5 py-4">
+              <h3 className="text-sm font-semibold tracking-tight text-navy">Patient</h3>
               <p className="mt-1 text-sm leading-6 text-muted">
-                Not available. The API has no patient role and no emergency-staff role. Those layouts are marked as
-                future work. They are not logins.
+                Wallet sign-in for a confirmed lifetime ID. Recovery codes stay in the browser. Records and permissions
+                are not loaded yet.
+              </p>
+            </article>
+            <article className="rounded-xl border border-dashed border-line bg-canvas px-5 py-4">
+              <h3 className="text-sm font-semibold tracking-tight text-navy">Emergency staff</h3>
+              <p className="mt-1 text-sm leading-6 text-muted">
+                Not available. There is no emergency-staff login. The emergency screen does not request chain access.
               </p>
             </article>
           </div>
@@ -193,8 +202,11 @@ export function WelcomePage() {
             </a>
           </div>
           <div>
-            <p className="text-xs font-medium tracking-[0.12em] text-muted uppercase">Not available</p>
-            <p className="mt-3 text-sm leading-6 text-muted">Patient sign-in and emergency-staff sign-in are not part of the current API.</p>
+            <p className="text-xs font-medium tracking-[0.12em] text-muted uppercase">Patient</p>
+            <Link to="/patient/login" className="mt-3 block text-sm font-medium text-teal hover:text-teal-dark">
+              Patient login
+            </Link>
+            <p className="mt-2 text-sm leading-6 text-muted">Emergency-staff sign-in is not part of the current API.</p>
           </div>
         </div>
         <div className="border-t border-line">

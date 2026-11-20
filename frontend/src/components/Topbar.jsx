@@ -10,7 +10,7 @@ export function Topbar({ title, onMenu, menuOpen = false }) {
 
   function signOut() {
     logout();
-    navigate("/login", { replace: true });
+    navigate(user?.role === "patient" ? "/patient/login" : "/login", { replace: true });
   }
 
   return (

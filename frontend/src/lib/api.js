@@ -32,19 +32,27 @@ function resolveBase(baseUrl) {
   return trimmed;
 }
 
-const PUBLIC_CONFLICT_MESSAGES = new Set([
+const PUBLIC_REQUEST_MESSAGES = new Set([
   "A staff account with this email already exists.",
+  "A patient with this identity commitment is already registered.",
+  "Candidate is not part of this review.",
   "Registration attempt is no longer retryable",
   "Registration review is not ready",
+  "Do not send a recovery secret.",
 ]);
 
 function errorForStatus(status, serverMessage) {
   if (status === 401) return new ApiError(FAILURE_MESSAGES.unauthorized, { status, code: "unauthorized" });
   if (status === 403) return new ApiError(FAILURE_MESSAGES.forbidden, { status, code: "forbidden" });
-  if (status === 400) return new ApiError(FAILURE_MESSAGES.invalid, { status, code: "invalid" });
+  if (status === 400) {
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage)
+      ? serverMessage
+      : FAILURE_MESSAGES.invalid;
+    return new ApiError(message, { status, code: "invalid" });
+  }
   if (status === 404) return new ApiError("The requested record was not found.", { status, code: "not_found" });
   if (status === 409) {
-    const message = PUBLIC_CONFLICT_MESSAGES.has(serverMessage)
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage)
       ? serverMessage
       : "That action conflicts with the current record.";
     return new ApiError(message, { status, code: "conflict" });
@@ -68,7 +76,9 @@ const REQUEST_MESSAGES = {
 };
 
 export function messageForRequest(error) {
-  if (error?.code === "conflict" && PUBLIC_CONFLICT_MESSAGES.has(error.message)) return error.message;
+  if ((error?.code === "conflict" || error?.code === "invalid") && PUBLIC_REQUEST_MESSAGES.has(error.message)) {
+    return error.message;
+  }
   return REQUEST_MESSAGES[error?.code] ?? REQUEST_MESSAGES.server;
 }
 

@@ -35,7 +35,7 @@ describe("AccessControl", function () {
     ).to.equal(false);
 
     await ctx.recordAccess
-      .connect(ctx.hospitalAdmin)
+      .connect(ctx.patient)
       .grantAccess(ctx.patientId, ctx.doctor.address, 0);
 
     expect(

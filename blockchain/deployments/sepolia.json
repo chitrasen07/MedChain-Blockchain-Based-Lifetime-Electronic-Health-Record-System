@@ -1,0 +1,96 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "deployer": "0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F",
+  "hospitalAdmin": "0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F",
+  "contracts": {
+    "RoleManager": {
+      "nonce": 0,
+      "address": "0xDE4331A5D901B1aBBbE98B51F075e5D0A5894B78",
+      "transactionHash": "0xccf0af6b616c8eb25a7ab0f4a2d7e94a495b1b7c642f9e502cf3671cec4be49d",
+      "gasUsed": "6116728",
+      "effectiveGasPrice": "1000000000",
+      "bytecodeMetadataMatches": true
+    },
+    "AuditLog": {
+      "nonce": 1,
+      "address": "0x85175F99DB99613DF7ce8452dd7C16eF475431B6",
+      "transactionHash": "0x37e9115efbf198bd47547d7993a1ebb9fc0632d661799bce44ad018f2e29f8b6",
+      "gasUsed": "2912627",
+      "effectiveGasPrice": "1000000000",
+      "bytecodeMetadataMatches": true
+    },
+    "PatientRegistry": {
+      "nonce": 2,
+      "address": "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806",
+      "transactionHash": "0xb70253a24ed62a394f720da45b4de14db1d7ba5987e19b65c268cd6008e2ee84",
+      "gasUsed": "9056013",
+      "effectiveGasPrice": "1000000000",
+      "bytecodeMetadataMatches": true
+    },
+    "RecordAccessControl": {
+      "nonce": 3,
+      "address": "0xe520020bDBE95039697e93B4305cDCe7e682CEa6",
+      "transactionHash": "0x5942b443d81c04eb9f7e7a65669b8bc8bda6cecd871bac6dd3c25bf927d41632",
+      "gasUsed": "4455231",
+      "effectiveGasPrice": "1000000000",
+      "bytecodeMetadataMatches": true
+    },
+    "EmergencyAccess": {
+      "nonce": 4,
+      "address": "0x7c662d0649eDa6406Decd37020a2aD3ea811Fbd6",
+      "transactionHash": "0x6f0d0a1b6ccfd216512ce76c0debb8c1f7f8542f1804994bcd940998b454d098",
+      "gasUsed": "5484571",
+      "effectiveGasPrice": "1000000000",
+      "bytecodeMetadataMatches": true
+    },
+    "MedicalRecordRegistry": {
+      "nonce": 5,
+      "address": "0x83A6DB7481E7037b9fBd063f14bE50097f8258Cd",
+      "transactionHash": "0x4693119c7428d9b8c1437e3faaf936e770f6626586e864aaa83a2f968d7ec005",
+      "gasUsed": "6425941",
+      "effectiveGasPrice": "1000000000",
+      "bytecodeMetadataMatches": true
+    }
+  },
+  "auditLoggers": [
+    {
+      "logger": "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806",
+      "transactionHash": "0xd985145db13a766803a82eb0e7d510cfb543f95d821905c676d121fc11dfb59c",
+      "gasUsed": "134875"
+    },
+    {
+      "logger": "0xe520020bDBE95039697e93B4305cDCe7e682CEa6",
+      "transactionHash": "0x7a1c0c8603e051adc62605115db1c48066d616155d6a140280dd9c4d9e6e3a9b",
+      "gasUsed": "134875"
+    },
+    {
+      "logger": "0x7c662d0649eDa6406Decd37020a2aD3ea811Fbd6",
+      "transactionHash": "0x1e9b6bc9f7a7e52962dfeae83301eb28dc00a2f7a5044dc4d94c8616e303e4d6",
+      "gasUsed": "134875"
+    },
+    {
+      "logger": "0x83A6DB7481E7037b9fBd063f14bE50097f8258Cd",
+      "transactionHash": "0x7c08af1830543b1aef16f5f795c97de4b0b150b5f882eb3bb58939bf3d545545",
+      "gasUsed": "134875"
+    }
+  ],
+  "hospitalAdminTransaction": {
+    "transactionHash": "0x7603b142429c9e1d0e97c0e599cb9a203f5e8a8d9db45764846f09a3466d93aa",
+    "gasUsed": "133466"
+  },
+  "dependencies": {
+    "auditLogRoleManager": true,
+    "patientRegistryRoleManager": true,
+    "patientRegistryAuditLog": true,
+    "recordAccessPatientRegistry": true,
+    "emergencyAccessPatientRegistry": true,
+    "medicalRecordAccess": true,
+    "medicalEmergencyAccess": true
+  },
+  "signerAuthorization": {
+    "isHospitalAdmin": true,
+    "hasHospitalAdminRole": true
+  },
+  "totalGasUsed": "35124077"
+}

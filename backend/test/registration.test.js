@@ -11,12 +11,16 @@ const config = {
   controllerAddress: "0x0000000000000000000000000000000000000001"
 };
 const admin = { id: "admin", role: "administrator", hospital_id: "hospital-a", status: "active" };
-const profile = { fullName: "Synthetic Registration", dateOfBirth: "1980-01-01" };
+const profile = {
+  fullName: "Synthetic Registration",
+  dateOfBirth: "1980-01-01",
+  controller: "0x0000000000000000000000000000000000000001"
+};
 
-function setup(reconciliation, commitmentAlreadyExists = false, registrationStatus = "unknown", submissionError = false) {
+function setup(reconciliation, commitmentAlreadyExists = false, registrationStatus = "unknown", submissionError = false, txHash) {
   let attempts = 0;
   let submitted = 0;
-  let result = { id: "registration-1", status: registrationStatus, claimed: registrationStatus === "unknown" };
+  let result = { id: "registration-1", status: registrationStatus, claimed: registrationStatus === "unknown", txHash };
   const db = {
     async getUserForAuth() { return admin; },
     identityHashes() { return [["fullName", "synthetic-hash"]]; },
@@ -38,7 +42,7 @@ function setup(reconciliation, commitmentAlreadyExists = false, registrationStat
     identityCommitment() { return "0x" + "11".repeat(32); },
     async commitmentExists() { return commitmentAlreadyExists; },
     async submitRegistration() {
-      if (submissionError) throw new Error("synthetic RPC failure");
+      if (submissionError) throw submissionError instanceof Error ? submissionError : new Error("synthetic RPC failure");
       return { txHash: "0xtx1" };
     },
     async reconcileRegistration() { return reconciliation(); }
@@ -65,9 +69,41 @@ test("registration persists the hash first and reconciles a delayed receipt", as
   assert.deepEqual(counts(), { attempts: 3, submitted: 1 });
 });
 
-test("an uncertain attempt with an existing commitment is never resubmitted", async () => {
+test("a failed duplicate commitment is not submitted again", async () => {
+  let submitted = 0;
+  const db = {
+    async getUserForAuth() { return admin; },
+    identityHashes() { return [["fullName", "synthetic-hash"]]; },
+    async matchPatient() { return { status: "no_match", candidateCount: 0 }; },
+    async findRegistrationByCommitment() {
+      return { status: "failed", txHash: null, lastError: "duplicate identity commitment" };
+    },
+    async createPendingPatient() { throw new Error("pending patient created"); },
+    async beginRegistration() { throw new Error("registration reopened"); }
+  };
+  const blockchain = {
+    identityCommitment() { return `0x${"11".repeat(32)}`; },
+    async submitRegistration() { submitted += 1; return { txHash: "0xnew" }; }
+  };
+  const app = createApp({ db, blockchain, config });
+  const response = await request(app).post("/patients").set("Authorization", auth()).send(profile);
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "A patient with this identity commitment is already registered.");
+  assert.equal(submitted, 0);
+});
+
+test("a known commitment without a transaction is a conflict and is not submitted", async () => {
   const { app, counts } = setup(() => ({ status: "pending", txHash: "0xtx1" }), true);
   const response = await request(app).post("/patients").set("Authorization", auth()).send(profile);
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, "A patient with this identity commitment is already registered.");
+  assert.equal(counts().submitted, 0);
+});
+
+test("an unknown submission that already has a transaction hash is not sent again", async () => {
+  const { app, counts } = setup(() => ({ status: "pending", txHash: "0xtx1" }), true, "unknown", false, "0xexisting");
+  const response = await request(app).post("/patients").set("Authorization", auth()).send(profile);
+  assert.equal(response.status, 202);
   assert.equal(response.body.status, "registration_reconciliation_required");
   assert.equal(counts().submitted, 0);
 });
@@ -79,9 +115,17 @@ test("a concurrent submission claim prevents a second blockchain submission", as
   assert.equal(counts().submitted, 0);
 });
 
-test("an RPC submission error leaves the registration requiring reconciliation", async () => {
-  const { app, counts } = setup(() => ({ status: "pending", txHash: "0xtx1" }), false, "unknown", true);
-  const response = await request(app).post("/patients").set("Authorization", auth()).send(profile);
-  assert.equal(response.body.status, "registration_reconciliation_required");
-  assert.equal(counts().submitted, 0);
+test("a decoded duplicate-commitment revert is a conflict and an indeterminate error is not", async () => {
+  const { app } = setup(() => ({ status: "pending" }), false, "unknown", true);
+  const indeterminate = await request(app).post("/patients").set("Authorization", auth()).send(profile);
+  assert.equal(indeterminate.status, 202);
+  assert.equal(indeterminate.body.status, "registration_reconciliation_required");
+
+  const conflict = setup(() => ({ status: "pending" }), false, "unknown", Object.assign(new Error("reverted"), {
+    revert: { name: "IdentityCommitmentAlreadyExists" },
+    statusCode: 409
+  }));
+  const duplicate = await request(conflict.app).post("/patients").set("Authorization", auth()).send(profile);
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error, "A patient with this identity commitment is already registered.");
 });

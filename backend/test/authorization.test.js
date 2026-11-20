@@ -209,6 +209,23 @@ test("a different unique violation stays an internal error", async () => {
   assert.equal(JSON.stringify(response.body).includes("PATIENT-000001"), false);
 });
 
+test("a review candidate outside the case remains HTTP 400", async () => {
+  const user = { id: "reviewer", role: "reviewer", hospital_id: "hospital-a", status: "active" };
+  const db = {
+    async getUserForAuth() { return user; },
+    async resolveReviewCase() {
+      throw Object.assign(new Error("Candidate is not part of this review"), { statusCode: 400 });
+    }
+  };
+  const app = createApp({ db, blockchain: {}, config });
+  const response = await request(app)
+    .post("/review-cases/11111111-1111-4111-8111-111111111111/decision")
+    .set("Authorization", `Bearer ${token(user)}`)
+    .send({ decision: "same_patient", candidatePatientId: "11111111-1111-4111-8111-111111111111" });
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, { error: "Candidate is not part of this review" });
+});
+
 test("intentional registration conflicts stay HTTP 409", async () => {
   const user = { id: "admin", role: "administrator", hospital_id: "hospital-a", status: "active" };
   const reviewId = "11111111-1111-4111-8111-111111111111";
@@ -259,14 +276,23 @@ test("intentional registration conflicts stay HTTP 409", async () => {
   const retry = await request(app)
     .post("/patients")
     .set("Authorization", `Bearer ${token(user)}`)
-    .send({ fullName: "Synthetic Patient", dateOfBirth: "1990-01-01" });
+    .send({
+      fullName: "Synthetic Patient",
+      dateOfBirth: "1990-01-01",
+      controller: "0x0000000000000000000000000000000000000001"
+    });
   assert.equal(retry.status, 409);
   assert.deepEqual(retry.body, { error: "Registration attempt is no longer retryable" });
 
   const review = await request(app)
     .post("/patients")
     .set("Authorization", `Bearer ${token(user)}`)
-    .send({ fullName: "Synthetic Patient", dateOfBirth: "1990-01-01", reviewCaseId: reviewId });
+    .send({
+      fullName: "Synthetic Patient",
+      dateOfBirth: "1990-01-01",
+      reviewCaseId: reviewId,
+      controller: "0x0000000000000000000000000000000000000001"
+    });
   assert.equal(review.status, 409);
   assert.deepEqual(review.body, { error: "Registration review is not ready" });
 });

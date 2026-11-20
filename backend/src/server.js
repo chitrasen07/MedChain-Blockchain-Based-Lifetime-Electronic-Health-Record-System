@@ -16,7 +16,7 @@ function readBlockchainEnabled(env) {
 function createRuntime(env) {
   const blockchainEnabled = readBlockchainEnabled(env);
   const required = ["DATABASE_URL", "JWT_SECRET", "IDENTITY_COMMITMENT_KEY", "PII_ENCRYPTION_KEY"];
-  if (blockchainEnabled) required.push("CONTROLLER_ADDRESS", "RPC_URL", "PATIENT_REGISTRY_ADDRESS", "BLOCKCHAIN_PRIVATE_KEY");
+  if (blockchainEnabled) required.push("RPC_URL", "PATIENT_REGISTRY_ADDRESS", "BLOCKCHAIN_PRIVATE_KEY");
   for (const name of required) if (!env[name]) throw new Error(`${name} is required`);
   return {
     port: Number(env.PORT || 3000),
@@ -29,7 +29,7 @@ function createRuntime(env) {
     rpcUrl: blockchainEnabled ? env.RPC_URL : undefined,
     registryAddress: blockchainEnabled ? env.PATIENT_REGISTRY_ADDRESS : undefined,
     privateKey: blockchainEnabled ? env.BLOCKCHAIN_PRIVATE_KEY : undefined,
-    controllerAddress: blockchainEnabled ? env.CONTROLLER_ADDRESS : undefined,
+    thirdwebSecretKey: blockchainEnabled ? env.THIRDWEB_SECRET_KEY : undefined,
     corsOrigin: env.CORS_ORIGIN || false
   };
 }

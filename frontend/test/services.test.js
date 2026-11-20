@@ -101,6 +101,15 @@ describe("patient and visit requests", () => {
         return true;
       }
     );
+    const review = createVisitService(client(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: "Candidate is not part of this review." }),
+    })));
+    await assert.rejects(review.create("PATIENT-000001", { recordReference: "ref" }), (error) => {
+      assert.equal(messageForRequest(error), "Candidate is not part of this review.");
+      return true;
+    });
 
     const visits = createVisitService(client(async () => ({
       ok: false,

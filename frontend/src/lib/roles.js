@@ -14,11 +14,13 @@ const LABELS = {
   receptionist: "Receptionist",
   hospital_staff: "Hospital staff",
   reviewer: "Reviewer",
+  patient: "Patient",
 };
 
 const MAX_SESSION_MS = 20 * 60 * 1000;
 
 export function homeForRole(role) {
+  if (role === "patient") return "/patient";
   return HOME[role] ?? null;
 }
 
@@ -27,6 +29,9 @@ export function roleLabel(role) {
 }
 
 export function pathAllowedForRole(role, path) {
+  if (role === "patient") {
+    return path === "/patient" || (typeof path === "string" && path.startsWith("/patient/") && !path.startsWith("/patient/login"));
+  }
   const home = homeForRole(role);
   if (!home || typeof path !== "string") return false;
   return path === home || path.startsWith(`${home}/`);
@@ -65,6 +70,40 @@ export function readSession(token, now = Date.now()) {
     id: payload.sub,
     role: payload.role,
     hospitalId: payload.hospitalId,
+    expiresAt,
+  };
+}
+
+export function readPatientSession(token, now = Date.now()) {
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts.some((part) => part.length === 0)) return null;
+
+  let payload;
+  try {
+    payload = JSON.parse(decodeBase64Url(parts[1]));
+  } catch {
+    return null;
+  }
+
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.role !== "patient" || payload.aud !== "medchain-patient") return null;
+  if (typeof payload.sub !== "string" || payload.sub.length === 0) return null;
+  if (typeof payload.hospitalId !== "string" || payload.hospitalId.length === 0) return null;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(payload.patientRef || "")) return null;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(payload.walletAddress || "")) return null;
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return null;
+
+  const expiresAt = payload.exp * 1000;
+  const remaining = expiresAt - now;
+  if (remaining <= 0 || remaining > MAX_SESSION_MS) return null;
+
+  return {
+    id: payload.sub,
+    role: "patient",
+    hospitalId: payload.hospitalId,
+    patientRef: payload.patientRef,
+    walletAddress: payload.walletAddress,
     expiresAt,
   };
 }

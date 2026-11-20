@@ -6,16 +6,17 @@ import {PatientRegistry} from "./PatientRegistry.sol";
 import {AuditLog} from "./AuditLog.sol";
 
 /// @title EmergencyAccess
-/// @notice Temporary, expiring emergency access for authorized medical responders.
+/// @notice One bounded break-glass grant per responder. It cannot be extended in place.
 contract EmergencyAccess {
     uint256 public constant MAX_DURATION = 72 hours;
 
     struct EmergencyGrant {
         address doctor;
-        string patientId;
+        bytes32 patientRef;
         bytes32 reasonHash;
-        uint256 startedAt;
-        uint256 expiresAt;
+        uint64 startedAt;
+        uint64 expiresAt;
+        uint64 cooldownEndsAt;
         bool active;
         bool exists;
     }
@@ -23,17 +24,17 @@ contract EmergencyAccess {
     RoleManager public immutable roleManager;
     PatientRegistry public immutable patientRegistry;
     AuditLog public immutable auditLog;
-
     mapping(bytes32 => EmergencyGrant) private grants;
 
-    event EmergencyAccessRequested(
-        string patientId, address indexed doctor, bytes32 reasonHash, uint256 expiresAt
-    );
+    bytes32 private constant EMERGENCY_GRANTED = keccak256("EMERGENCY_ACCESS_GRANTED");
+    bytes32 private constant EMERGENCY_REVOKED = keccak256("EMERGENCY_ACCESS_REVOKED");
+    bytes32 private constant EMERGENCY_EXPIRED = keccak256("EMERGENCY_ACCESS_EXPIRED");
+
     event EmergencyAccessGranted(
-        string patientId, address indexed doctor, bytes32 reasonHash, uint256 startedAt, uint256 expiresAt
+        bytes32 indexed patientRef, address indexed doctor, bytes32 reasonHash, uint256 expiresAt
     );
-    event EmergencyAccessRevoked(string patientId, address indexed doctor, address indexed revokedBy);
-    event EmergencyAccessExpired(string patientId, address indexed doctor, uint256 expiresAt);
+    event EmergencyAccessRevoked(bytes32 indexed patientRef, address indexed doctor, address indexed revokedBy);
+    event EmergencyAccessExpired(bytes32 indexed patientRef, address indexed doctor, uint256 expiresAt);
 
     error Unauthorized();
     error ZeroAddress();
@@ -42,6 +43,7 @@ contract EmergencyAccess {
     error PatientInactive();
     error NoActiveGrant();
     error NotExpired();
+    error EmergencyCooldown();
 
     constructor(address roleManager_, address patientRegistry_, address auditLog_) {
         if (roleManager_ == address(0) || patientRegistry_ == address(0) || auditLog_ == address(0)) {
@@ -52,95 +54,60 @@ contract EmergencyAccess {
         auditLog = AuditLog(auditLog_);
     }
 
-    function requestEmergencyAccess(string calldata patientId, bytes32 reasonHash, uint256 duration)
-        external
-    {
+    function requestEmergencyAccess(bytes32 patientRef, bytes32 reasonHash, uint256 duration) external {
         if (!roleManager.isEmergencyResponder(msg.sender)) revert Unauthorized();
         if (duration == 0 || duration > MAX_DURATION) revert InvalidDuration();
         if (reasonHash == bytes32(0)) revert InvalidReason();
-        if (!patientRegistry.isActivePatient(patientId)) revert PatientInactive();
+        if (!patientRegistry.isActivePatient(patientRef)) revert PatientInactive();
 
-        uint256 expiresAt = block.timestamp + duration;
-        bytes32 key = _key(patientId, msg.sender);
+        bytes32 key = _key(patientRef, msg.sender);
+        EmergencyGrant storage grant = grants[key];
+        if (grant.exists && block.timestamp < grant.cooldownEndsAt) revert EmergencyCooldown();
 
+        uint64 expiresAt = uint64(block.timestamp + duration);
         grants[key] = EmergencyGrant({
             doctor: msg.sender,
-            patientId: patientId,
+            patientRef: patientRef,
             reasonHash: reasonHash,
-            startedAt: block.timestamp,
+            startedAt: uint64(block.timestamp),
             expiresAt: expiresAt,
+            cooldownEndsAt: expiresAt + uint64(MAX_DURATION),
             active: true,
             exists: true
         });
-
-        emit EmergencyAccessRequested(patientId, msg.sender, reasonHash, expiresAt);
-        emit EmergencyAccessGranted(patientId, msg.sender, reasonHash, block.timestamp, expiresAt);
-        auditLog.recordAudit(msg.sender, patientId, "EMERGENCY_ACCESS_REQUESTED", _toHex(reasonHash), true);
-        auditLog.recordAudit(msg.sender, patientId, "EMERGENCY_ACCESS_GRANTED", _toHex(reasonHash), true);
+        emit EmergencyAccessGranted(patientRef, msg.sender, reasonHash, expiresAt);
+        auditLog.recordAudit(msg.sender, patientRef, EMERGENCY_GRANTED, true);
     }
 
-    function checkEmergencyAccess(string calldata patientId, address doctor) public view returns (bool) {
-        if (!patientRegistry.isActivePatient(patientId)) return false;
-        EmergencyGrant storage grant = grants[_key(patientId, doctor)];
+    function checkEmergencyAccess(bytes32 patientRef, address doctor) public view returns (bool) {
+        if (!patientRegistry.isActivePatient(patientRef)) return false;
+        EmergencyGrant storage grant = grants[_key(patientRef, doctor)];
         if (!grant.exists || !grant.active) return false;
         if (block.timestamp >= grant.expiresAt) return false;
         return true;
     }
 
-    function revokeEmergencyAccess(string calldata patientId, address doctor) external {
-        EmergencyGrant storage grant = grants[_key(patientId, doctor)];
+    function revokeEmergencyAccess(bytes32 patientRef, address doctor) external {
+        EmergencyGrant storage grant = grants[_key(patientRef, doctor)];
         if (!grant.exists || !grant.active) revert NoActiveGrant();
-
-        address controller = patientRegistry.getController(patientId);
+        address controller = patientRegistry.getController(patientRef);
         bool allowed = msg.sender == doctor || msg.sender == controller || roleManager.isHospitalAdmin(msg.sender);
         if (!allowed) revert Unauthorized();
-
         grant.active = false;
-        emit EmergencyAccessRevoked(patientId, doctor, msg.sender);
-        auditLog.recordAudit(msg.sender, patientId, "EMERGENCY_ACCESS_REVOKED", _toHex(bytes32(uint256(uint160(doctor)))), true);
+        emit EmergencyAccessRevoked(patientRef, doctor, msg.sender);
+        auditLog.recordAudit(msg.sender, patientRef, EMERGENCY_REVOKED, true);
     }
 
-    function expireEmergencyAccess(string calldata patientId, address doctor) external {
-        EmergencyGrant storage grant = grants[_key(patientId, doctor)];
+    function expireEmergencyAccess(bytes32 patientRef, address doctor) external {
+        EmergencyGrant storage grant = grants[_key(patientRef, doctor)];
         if (!grant.exists || !grant.active) revert NoActiveGrant();
         if (block.timestamp < grant.expiresAt) revert NotExpired();
-
         grant.active = false;
-        emit EmergencyAccessExpired(patientId, doctor, grant.expiresAt);
+        emit EmergencyAccessExpired(patientRef, doctor, grant.expiresAt);
+        auditLog.recordAudit(msg.sender, patientRef, EMERGENCY_EXPIRED, true);
     }
 
-    function getEmergencyAccess(string calldata patientId, address doctor)
-        external
-        view
-        returns (
-            address doctorAddress,
-            bytes32 reasonHash,
-            uint256 startedAt,
-            uint256 expiresAt,
-            bool active
-        )
-    {
-        EmergencyGrant storage grant = grants[_key(patientId, doctor)];
-        if (!grant.exists) revert NoActiveGrant();
-        bool currentlyActive =
-            grant.active && block.timestamp < grant.expiresAt && patientRegistry.isActivePatient(patientId);
-        return (grant.doctor, grant.reasonHash, grant.startedAt, grant.expiresAt, currentlyActive);
-    }
-
-    function _key(string calldata patientId, address doctor) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(patientId, doctor));
-    }
-
-    function _toHex(bytes32 data) internal pure returns (string memory) {
-        bytes16 hexSymbols = "0123456789abcdef";
-        bytes memory str = new bytes(66);
-        str[0] = "0";
-        str[1] = "x";
-        for (uint256 i = 0; i < 32; i++) {
-            uint8 b = uint8(data[i]);
-            str[2 + i * 2] = hexSymbols[b >> 4];
-            str[3 + i * 2] = hexSymbols[b & 0x0f];
-        }
-        return string(str);
+    function _key(bytes32 patientRef, address doctor) internal pure returns (bytes32) {
+        return keccak256(abi.encode(patientRef, doctor));
     }
 }

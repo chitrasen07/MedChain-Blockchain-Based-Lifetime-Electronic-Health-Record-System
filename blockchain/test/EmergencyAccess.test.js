@@ -26,8 +26,7 @@ describe("EmergencyAccess", function () {
         .connect(ctx.doctor)
         .requestEmergencyAccess(ctx.patientId, reasonHash, 3600)
     )
-      .to.emit(ctx.emergencyAccess, "EmergencyAccessRequested")
-      .and.to.emit(ctx.emergencyAccess, "EmergencyAccessGranted");
+      .to.emit(ctx.emergencyAccess, "EmergencyAccessGranted");
 
     expect(
       await ctx.emergencyAccess.checkEmergencyAccess(

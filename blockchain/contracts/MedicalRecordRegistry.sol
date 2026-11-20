@@ -8,39 +8,20 @@ import {EmergencyAccess} from "./EmergencyAccess.sol";
 import {AuditLog} from "./AuditLog.sol";
 
 /// @title MedicalRecordRegistry
-/// @notice Stores cryptographic hashes/references of off-chain medical records only.
+/// @notice Append-only hashes of off-chain records. No document, diagnosis, or personal data is stored.
+/// @dev Hashes and references are public. Authorization is enforced at call time and is not retained
+/// by the original author after consent or emergency access ends.
 contract MedicalRecordRegistry {
-    enum RecordType {
-        BIRTH,
-        VACCINATION,
-        DIAGNOSIS,
-        ALLERGY,
-        LAB_TEST,
-        PRESCRIPTION,
-        MEDICATION,
-        HOSPITAL_ADMISSION,
-        HOSPITAL_DISCHARGE,
-        SURGERY,
-        FOLLOW_UP,
-        EMERGENCY_TREATMENT,
-        MEDICAL_DOCUMENT
-    }
-
-    enum RecordOrigin {
-        CURRENT,
-        HISTORICAL
-    }
-
-    struct MedicalRecord {
-        string recordId;
-        string patientId;
-        RecordType recordType;
+    struct RecordVersion {
         bytes32 recordHash;
-        address createdBy;
-        uint256 timestamp;
-        RecordOrigin recordOrigin;
+        address author;
         uint256 recordDate;
         uint256 registeredAt;
+    }
+
+    struct Record {
+        bytes32 patientRef;
+        RecordVersion[] versions;
         bool active;
         bool exists;
     }
@@ -50,14 +31,17 @@ contract MedicalRecordRegistry {
     RecordAccessControl public immutable recordAccess;
     EmergencyAccess public immutable emergencyAccess;
     AuditLog public immutable auditLog;
+    mapping(bytes32 => Record) private records;
 
-    mapping(bytes32 => MedicalRecord) private records;
+    bytes32 private constant RECORD_CREATED = keccak256("RECORD_CREATED");
+    bytes32 private constant RECORD_VERSION_APPENDED = keccak256("RECORD_VERSION_APPENDED");
+    bytes32 private constant RECORD_VERIFIED = keccak256("RECORD_VERIFIED");
+    bytes32 private constant RECORD_DEACTIVATED = keccak256("RECORD_DEACTIVATED");
 
-    event MedicalRecordCreated(
-        string recordId, string patientId, RecordType recordType, bytes32 recordHash, address indexed createdBy
+    event RecordVersionAppended(
+        bytes32 indexed recordRef, bytes32 indexed patientRef, bytes32 recordHash, uint256 versionIndex, address indexed author
     );
-    event MedicalRecordUpdated(string recordId, bytes32 previousHash, bytes32 newHash, address indexed updatedBy);
-    event MedicalRecordDeactivated(string recordId, address indexed deactivatedBy);
+    event RecordDeactivated(bytes32 indexed recordRef, address indexed deactivatedBy);
 
     error Unauthorized();
     error ZeroAddress();
@@ -68,6 +52,7 @@ contract MedicalRecordRegistry {
     error RecordAlreadyExists();
     error RecordNotFound();
     error RecordInactive();
+    error VersionNotFound();
 
     constructor(
         address roleManager_,
@@ -79,9 +64,7 @@ contract MedicalRecordRegistry {
         if (
             roleManager_ == address(0) || patientRegistry_ == address(0) || recordAccess_ == address(0)
                 || emergencyAccess_ == address(0) || auditLog_ == address(0)
-        ) {
-            revert ZeroAddress();
-        }
+        ) revert ZeroAddress();
         roleManager = RoleManager(roleManager_);
         patientRegistry = PatientRegistry(patientRegistry_);
         recordAccess = RecordAccessControl(recordAccess_);
@@ -89,162 +72,106 @@ contract MedicalRecordRegistry {
         auditLog = AuditLog(auditLog_);
     }
 
-    function registerRecordHash(
-        string calldata recordId,
-        string calldata patientId,
-        RecordType recordType,
-        bytes32 recordHash
-    ) external {
-        if (bytes(recordId).length == 0) revert InvalidIdentifier();
-        if (recordHash == bytes32(0)) revert InvalidHash();
-        if (!patientRegistry.isActivePatient(patientId)) revert PatientInactive();
-        _requireWritePermission(patientId);
-
-        bytes32 key = _key(recordId);
-        if (records[key].exists) revert RecordAlreadyExists();
-
-        records[key] = MedicalRecord({
-            recordId: recordId,
-            patientId: patientId,
-            recordType: recordType,
-            recordHash: recordHash,
-            createdBy: msg.sender,
-            timestamp: block.timestamp,
-            recordOrigin: RecordOrigin.CURRENT,
-            recordDate: block.timestamp,
-            registeredAt: block.timestamp,
-            active: true,
-            exists: true
-        });
-
-        emit MedicalRecordCreated(recordId, patientId, recordType, recordHash, msg.sender);
-        auditLog.recordAudit(msg.sender, patientId, "RECORD_CREATED", recordId, true);
+    function createRecord(bytes32 recordRef, bytes32 patientRef, bytes32 recordHash, uint256 recordDate) external {
+        if (recordRef == bytes32(0)) revert InvalidIdentifier();
+        if (records[recordRef].exists) revert RecordAlreadyExists();
+        if (!patientRegistry.isActivePatient(patientRef)) revert PatientInactive();
+        _requireWrite(patientRef);
+        uint256 dated = _dated(recordDate);
+        records[recordRef].patientRef = patientRef;
+        records[recordRef].active = true;
+        records[recordRef].exists = true;
+        _append(recordRef, patientRef, recordHash, dated, RECORD_CREATED);
     }
 
-    function registerHistoricalRecordHash(
-        string calldata recordId,
-        string calldata patientId,
-        RecordType recordType,
-        bytes32 recordHash,
-        uint256 recordDate
-    ) external {
-        if (bytes(recordId).length == 0) revert InvalidIdentifier();
-        if (recordHash == bytes32(0)) revert InvalidHash();
-        if (recordDate == 0) revert InvalidRecordDate();
-        if (!patientRegistry.isActivePatient(patientId)) revert PatientInactive();
-        _requireWritePermission(patientId);
-
-        bytes32 key = _key(recordId);
-        if (records[key].exists) revert RecordAlreadyExists();
-
-        records[key] = MedicalRecord({
-            recordId: recordId,
-            patientId: patientId,
-            recordType: recordType,
-            recordHash: recordHash,
-            createdBy: msg.sender,
-            timestamp: block.timestamp,
-            recordOrigin: RecordOrigin.HISTORICAL,
-            recordDate: recordDate,
-            registeredAt: block.timestamp,
-            active: true,
-            exists: true
-        });
-
-        emit MedicalRecordCreated(recordId, patientId, recordType, recordHash, msg.sender);
-        auditLog.recordAudit(msg.sender, patientId, "RECORD_CREATED", recordId, true);
-    }
-
-    function updateRecordHash(string calldata recordId, bytes32 newHash) external {
-        if (newHash == bytes32(0)) revert InvalidHash();
-        MedicalRecord storage record_ = _requireRecord(recordId);
+    function appendRecordVersion(bytes32 recordRef, bytes32 recordHash, uint256 recordDate) external {
+        Record storage record_ = _requireRecord(recordRef);
         if (!record_.active) revert RecordInactive();
-        _requireUpdatePermission(record_);
-
-        bytes32 previousHash = record_.recordHash;
-        record_.recordHash = newHash;
-        record_.timestamp = block.timestamp;
-
-        emit MedicalRecordUpdated(recordId, previousHash, newHash, msg.sender);
-        auditLog.recordAudit(msg.sender, record_.patientId, "RECORD_UPDATED", recordId, true);
+        if (!patientRegistry.isActivePatient(record_.patientRef)) revert PatientInactive();
+        _requireWrite(record_.patientRef);
+        _append(recordRef, record_.patientRef, recordHash, _dated(recordDate), RECORD_VERSION_APPENDED);
     }
 
-    function getRecordHash(string calldata recordId) external view returns (bytes32) {
-        MedicalRecord storage record_ = _requireRecord(recordId);
-        return record_.recordHash;
-    }
-
-    function getRecordMetadata(string calldata recordId)
+    function verifyRecordHash(bytes32 recordRef, uint256 versionIndex, bytes32 submittedHash)
         external
-        view
-        returns (RecordOrigin recordOrigin, uint256 recordDate, uint256 registeredAt)
+        returns (bool verified)
     {
-        MedicalRecord storage record_ = _requireRecord(recordId);
-        return (record_.recordOrigin, record_.recordDate, record_.registeredAt);
+        Record storage record_ = _requireRecord(recordRef);
+        _requireReader(record_.patientRef);
+        if (versionIndex >= record_.versions.length) revert VersionNotFound();
+        verified = record_.versions[versionIndex].recordHash == submittedHash;
+        auditLog.recordAudit(msg.sender, recordRef, RECORD_VERIFIED, verified);
     }
 
-    function getRecord(string calldata recordId)
-        external
-        view
-        returns (
-            string memory id,
-            string memory patientId,
-            RecordType recordType,
-            bytes32 recordHash,
-            address createdBy,
-            uint256 timestamp,
-            bool active
-        )
-    {
-        MedicalRecord storage record_ = _requireRecord(recordId);
-        return (
-            record_.recordId,
-            record_.patientId,
-            record_.recordType,
-            record_.recordHash,
-            record_.createdBy,
-            record_.timestamp,
-            record_.active
-        );
-    }
-
-    function verifyRecordHash(string calldata recordId, bytes32 submittedHash) external returns (bool verified) {
-        MedicalRecord storage record_ = _requireRecord(recordId);
-        verified = record_.active && record_.recordHash == submittedHash;
-        auditLog.recordAudit(msg.sender, record_.patientId, "RECORD_VERIFIED", recordId, verified);
-    }
-
-    function deactivateRecord(string calldata recordId) external {
-        MedicalRecord storage record_ = _requireRecord(recordId);
+    function deactivateRecord(bytes32 recordRef) external {
+        Record storage record_ = _requireRecord(recordRef);
         if (!record_.active) revert RecordInactive();
-        if (msg.sender != record_.createdBy && !roleManager.isHospitalAdmin(msg.sender)) {
-            revert Unauthorized();
-        }
-
+        if (!patientRegistry.isActivePatient(record_.patientRef)) revert PatientInactive();
+        address controller = patientRegistry.getController(record_.patientRef);
+        if (msg.sender != controller) _requireWrite(record_.patientRef);
         record_.active = false;
-        emit MedicalRecordDeactivated(recordId, msg.sender);
-        auditLog.recordAudit(msg.sender, record_.patientId, "RECORD_DEACTIVATED", recordId, true);
+        emit RecordDeactivated(recordRef, msg.sender);
+        auditLog.recordAudit(msg.sender, recordRef, RECORD_DEACTIVATED, true);
     }
 
-    function _requireWritePermission(string calldata patientId) internal view {
-        if (roleManager.isHospitalAdmin(msg.sender)) return;
+    function versionCount(bytes32 recordRef) external view returns (uint256) {
+        return _requireRecord(recordRef).versions.length;
+    }
+
+    function getVersion(bytes32 recordRef, uint256 versionIndex)
+        external
+        view
+        returns (bytes32 recordHash, address author, uint256 recordDate, uint256 registeredAt)
+    {
+        Record storage record_ = _requireRecord(recordRef);
+        if (versionIndex >= record_.versions.length) revert VersionNotFound();
+        RecordVersion storage version = record_.versions[versionIndex];
+        return (version.recordHash, version.author, version.recordDate, version.registeredAt);
+    }
+
+    function getRecord(bytes32 recordRef) external view returns (bytes32 patientRef, uint256 versions, bool active) {
+        Record storage record_ = _requireRecord(recordRef);
+        return (record_.patientRef, record_.versions.length, record_.active);
+    }
+
+    function _append(bytes32 recordRef, bytes32 patientRef, bytes32 recordHash, uint256 recordDate, bytes32 actionCode)
+        internal
+    {
+        if (recordHash == bytes32(0)) revert InvalidHash();
+        Record storage record_ = records[recordRef];
+        record_.versions.push(
+            RecordVersion({
+                recordHash: recordHash,
+                author: msg.sender,
+                recordDate: recordDate,
+                registeredAt: block.timestamp
+            })
+        );
+        emit RecordVersionAppended(recordRef, patientRef, recordHash, record_.versions.length - 1, msg.sender);
+        auditLog.recordAudit(msg.sender, recordRef, actionCode, true);
+    }
+
+    function _dated(uint256 recordDate) internal view returns (uint256) {
+        if (recordDate == 0) return block.timestamp;
+        if (recordDate > block.timestamp) revert InvalidRecordDate();
+        return recordDate;
+    }
+
+    function _requireWrite(bytes32 patientRef) internal view {
         if (!roleManager.isMedicalStaff(msg.sender)) revert Unauthorized();
-        if (recordAccess.hasAccess(patientId, msg.sender)) return;
-        if (emergencyAccess.checkEmergencyAccess(patientId, msg.sender)) return;
+        if (recordAccess.hasAccess(patientRef, msg.sender)) return;
+        if (emergencyAccess.checkEmergencyAccess(patientRef, msg.sender)) return;
         revert Unauthorized();
     }
 
-    function _requireUpdatePermission(MedicalRecord storage record_) internal view {
-        if (msg.sender == record_.createdBy || roleManager.isHospitalAdmin(msg.sender)) return;
-        revert Unauthorized();
+    function _requireReader(bytes32 patientRef) internal view {
+        address controller = patientRegistry.getController(patientRef);
+        if (msg.sender == controller) return;
+        _requireWrite(patientRef);
     }
 
-    function _requireRecord(string calldata recordId) internal view returns (MedicalRecord storage record_) {
-        record_ = records[_key(recordId)];
+    function _requireRecord(bytes32 recordRef) internal view returns (Record storage record_) {
+        record_ = records[recordRef];
         if (!record_.exists) revert RecordNotFound();
-    }
-
-    function _key(string calldata recordId) internal pure returns (bytes32) {
-        return keccak256(bytes(recordId));
     }
 }

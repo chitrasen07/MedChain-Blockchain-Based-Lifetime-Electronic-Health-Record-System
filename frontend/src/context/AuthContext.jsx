@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, apiClient } from "../lib/api";
-import { readSession } from "../lib/roles";
+import { readPatientSession, readSession } from "../lib/roles";
 import { AuthContext } from "./auth-context";
 
 const EXPIRED_NOTICE = "Your session has ended. Sign in again.";
@@ -47,6 +47,28 @@ export function AuthProvider({ children }) {
           throw new ApiError("Sign-in could not be completed. Try again later.", { status: 502, code: "server" });
         }
         apiClient.setAccessToken(token);
+        setNotice("");
+        setUser(session);
+        return session;
+      },
+      async loginPatient({ patientId, walletAddress, signMessage }) {
+        const challenge = await apiClient.request("/patient-auth/challenge", {
+          method: "POST",
+          body: { patientId, walletAddress },
+          authenticated: false,
+        });
+        const signature = await signMessage(challenge.message);
+        const payload = await apiClient.request("/patient-auth/token", {
+          method: "POST",
+          body: { nonce: challenge.nonce, signature },
+          authenticated: false,
+        });
+        const session = readPatientSession(payload?.token);
+        if (!session) {
+          apiClient.setAccessToken(null);
+          throw new ApiError("Patient sign-in could not be completed. Try again later.", { status: 502, code: "server" });
+        }
+        apiClient.setAccessToken(payload.token);
         setNotice("");
         setUser(session);
         return session;

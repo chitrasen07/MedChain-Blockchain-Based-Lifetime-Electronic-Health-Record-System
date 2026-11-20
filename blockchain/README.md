@@ -9,7 +9,7 @@ Clinical data stays off-chain. The chain stores identifiers, cryptographic hashe
 | Contract | File | Responsibility |
 | --- | --- | --- |
 | `RoleManager` | `contracts/RoleManager.sol` | Hospital roles on OpenZeppelin AccessControl |
-| `PatientRegistry` | `contracts/PatientRegistry.sol` | Patient ID, generated DID/reference, optional identity commitment, controller wallet, active flag |
+| `PatientRegistry` | `contracts/PatientRegistry.sol` | Opaque patient reference, required identity commitment, individual or unclaimed controller |
 | `RecordAccessControl` | `contracts/AccessControl.sol` | Permanent or time-limited record access grants |
 | `EmergencyAccess` | `contracts/EmergencyAccess.sol` | Temporary emergency access with mandatory expiry |
 | `MedicalRecordRegistry` | `contracts/MedicalRecordRegistry.sol` | Record hash registration and verification |
@@ -21,13 +21,13 @@ Clinical data stays off-chain. The chain stores identifiers, cryptographic hashe
 
 A public or consortium ledger is replicated. Names, diagnoses, prescriptions, and documents must not be written to it. These contracts store:
 
-- `patientId` / DID references
-- DIDs generated as `keccak256(domain, registry address, registration number)`; callers never provide a DID
-- Optional high-entropy `bytes32` identity commitments from a trusted off-chain identity service
+- opaque `bytes32` patient and record references
+- required `bytes32` identity, claim, recovery, and record-hash commitments
 - controller and staff wallet addresses
-- `bytes32` hashes of off-chain records and emergency reason references
 - permission windows and timestamps
-- audit action names and resource IDs
+- fixed audit action codes
+
+Sequential patient numbers, DIDs derived from those numbers, diagnosis categories, and free-text audit descriptions are not stored. Nothing in this list is confidential merely because a Solidity variable is private. Anyone who reads the chain can see it.
 
 ## Record hashing
 
@@ -39,9 +39,9 @@ SHA-256(canonical record bytes) → bytes32 recordHash
 
 On-chain:
 
-1. `registerRecordHash(recordId, patientId, recordType, recordHash)`
-2. Later `verifyRecordHash(recordId, submittedHash)`
-3. Equal hashes ⇒ integrity OK; mismatch ⇒ the off-chain record changed
+1. `createRecord(recordRef, patientRef, recordHash, recordDate)`
+2. Later `appendRecordVersion(recordRef, recordHash, recordDate)` keeps every earlier hash
+3. `verifyRecordHash(recordRef, versionIndex, submittedHash)` checks one stored version
 
 ## Roles
 
@@ -51,39 +51,41 @@ The deployer receives `SUPER_ADMIN`. Hospital admins may assign clinical and pat
 
 ## Access control
 
-The patient controller wallet or a hospital/super admin may `grantAccess` / `revokeAccess`.
+The patient controller may `grantAccess` / `revokeAccess`. A hospital administrator cannot grant or revoke clinical access.
 
-- `expiresAt = 0` ⇒ permanent until revoked
-- `expiresAt > now` ⇒ time-limited; `hasAccess` is false after expiry
+- `expiresAt = 0` means the grant lasts until the controller revokes it
+- `expiresAt > now` means the grant ends at that time
 
-Staff cannot grant themselves access.
+## Patient registration and ownership
 
-## Patient registration and identity commitments
+Hospital administrators call `registerPatient(bytes32 patientRef, address controller, bytes32 identityCommitment, bytes32 claimCommitment)`.
 
-Hospital administrators call `PatientRegistry.registerPatient(controller)`. The registry
-assigns the next sequential ID (`PATIENT-000001`) and generates a unique
-`did:medchain:0x...` value from the registry address and registration number. A reverted
-transaction does not consume the number.
+- `patientRef` is an opaque 32-byte reference generated off-chain. The chain does not issue `PATIENT-000001`.
+- The friendly lifetime ID stays in PostgreSQL.
+- `identityCommitment` is required. There is no registration path without one, and a commitment can belong to only one patient reference.
+- Set `controller` to the patient's wallet and `claimCommitment` to zero when the patient has a wallet.
+- Set `controller` to the zero address and `claimCommitment` to `keccak256(abi.encode(secret, CLAIM_DOMAIN))` when the patient has no wallet. The hospital never receives a wallet key and cannot later choose the controller.
+- The patient later calls `announceControllerClaim` and, after one hour, `revealControllerClaim`. The secret and the claimant address are bound together, so a copied transaction cannot choose a different wallet.
+- The current controller proposes a transfer. The new controller must accept it.
+- Recovery uses the same delay. The controller sets `keccak256(abi.encode(secret, RECOVERY_DOMAIN))` in advance. Without that commitment, a lost controller cannot be replaced by the hospital.
 
-For duplicate detection backed by an identity service, an administrator may call
-`registerPatientWithIdentityCommitment(controller, identityCommitment)`. The commitment
-must be generated off chain with a high-entropy secret. Raw Aadhaar, PAN, passport,
-driving-licence numbers, names, dates of birth, and other personal data must never be
-sent to this contract. The registry rejects a commitment already used on that registry.
-The commitment path is only a blockchain-side foundation: matching and verification by a
-trusted off-chain service is not implemented here.
-
-One deployed registry can serve multiple authorized hospitals on the same blockchain.
-Separate blockchain networks do not share this registry automatically; cross-chain
-identity resolution would require a separately designed identity service.
+Everything stored or emitted by these contracts is readable on the chain. Restricted getters and `private` variables do not make that data confidential. Personal details, clinical text, and the detailed audit trail stay off-chain.
 
 ## Emergency access
 
-Authorized `DOCTOR`, `SPECIALIST`, or `NURSE` may request access with a **reason hash** and duration (1 second through 72 hours). There is no permanent emergency grant. `checkEmergencyAccess` returns false after expiry.
+An authorized doctor, specialist, or nurse may open one break-glass grant with a reason hash and a duration from 1 second through 72 hours. The grant cannot be extended. The same responder cannot open another grant for that patient until 72 hours after the first grant's expiry, including when it is revoked early. Record changes require a current consent grant or a current emergency grant. The original author does not keep edit rights after that authorization ends.
+
+## Record hashes
+
+`createRecord` stores the first hash. `appendRecordVersion` adds another hash and leaves the earlier hash in place. There is no diagnosis or document field.
+
+## Application roles and chain roles
+
+The API roles are administrator, doctor, receptionist, hospital staff, and reviewer. The chain roles are the RoleManager values listed above. They are not assigned automatically from an API login. Receptionist, reviewer, and hospital staff have no chain role. A chain hospital administrator can register and deactivate patient references and can revoke emergency access. That role cannot grant consent or write a record hash.
 
 ## Audit trail
 
-Authorized system contracts append entries. There is no update or delete. Typical actions: `PATIENT_REGISTERED`, `RECORD_CREATED`, `RECORD_UPDATED`, `RECORD_VERIFIED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `EMERGENCY_ACCESS_REQUESTED`, `EMERGENCY_ACCESS_GRANTED`, `EMERGENCY_ACCESS_REVOKED`, `PATIENT_DEACTIVATED`.
+Authorized registry contracts append fixed action codes and opaque subjects. There is no update or delete. The deployer is not an audit writer. A super administrator can still authorize a logger, so that authority should be used only for the four registry contracts. The detailed audit record remains in PostgreSQL. On-chain entries are public.
 
 ## Architecture
 
@@ -128,7 +130,8 @@ arguments:
 Using the `SUPER_ADMIN` account from `RoleManager`, call
 `AuditLog.setAuthorizedLogger(address, true)` for `PatientRegistry`,
 `RecordAccessControl`, `EmergencyAccess`, and `MedicalRecordRegistry`. Assign the
-`HOSPITAL_ADMIN` role before attempting patient registration. These steps are for a
-local Remix VM only; no live-network deployment is performed by this project.
+`HOSPITAL_ADMIN` role before attempting patient registration.
 
-Do not use a public network until the rest of MedChain is ready.
+The current Sepolia deployment is recorded in `deployments/sepolia.json`.
+`scripts/deploy.js` accepts only local Hardhat (chain ID 31337) and Sepolia
+(chain ID 11155111). Do not redeploy over that manifest and do not use mainnet.

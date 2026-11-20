@@ -118,6 +118,13 @@ export function LoginPage() {
                 Sign in
               </Button>
             </form>
+            <p className="mt-4 text-center text-sm text-muted">
+              Patients use{" "}
+              <Link to="/patient/login" className="font-medium text-teal hover:text-teal-dark">
+                patient login
+              </Link>
+              .
+            </p>
           </div>
         </div>
       </section>

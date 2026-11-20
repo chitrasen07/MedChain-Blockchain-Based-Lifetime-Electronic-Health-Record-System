@@ -14,7 +14,8 @@ export function ProtectedRoute({ allow }) {
   }
 
   if (!isAuthenticated || !user) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    const signIn = allow === "patient" ? "/patient/login" : "/login";
+    return <Navigate to={signIn} replace state={{ from: location.pathname }} />;
   }
 
   if (user.role !== allow) {

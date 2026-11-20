@@ -2,9 +2,11 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const crypto = require("node:crypto");
 const { z } = require("zod");
 const { encryptJson, decryptJson, fieldHash } = require("./crypto");
 const { issueToken, requireAuth } = require("./auth");
+const { registerPatientAuth } = require("./patientAuth");
 
 const profileSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -13,6 +15,38 @@ const profileSchema = z.object({
   email: z.string().email().max(320).optional(),
   emergencyContact: z.string().trim().max(200).optional()
 });
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
+const DUPLICATE_COMMITMENT_MESSAGE = "A patient with this identity commitment is already registered.";
+
+function readPatientOwnership(body) {
+  const address = typeof body.controller === "string" ? body.controller.trim() : "";
+  const claim = typeof body.claimCommitment === "string" ? body.claimCommitment.trim() : "";
+  const controller = /^0x[0-9a-fA-F]{40}$/.test(address) ? address : "";
+  const claimCommitment = /^0x[0-9a-fA-F]{64}$/.test(claim) ? claim : "";
+  const hasController = controller && controller.toLowerCase() !== ZERO_ADDRESS;
+  const hasClaim = claimCommitment && claimCommitment.toLowerCase() !== ZERO_BYTES32;
+  if (hasController === hasClaim) {
+    const error = new Error(hasController
+      ? "Provide either a patient controller or an ownership claim commitment."
+      : "A patient controller or an ownership claim commitment is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return hasController
+    ? { controller, claimCommitment: ZERO_BYTES32, storedController: controller }
+    : { controller: ZERO_ADDRESS, claimCommitment, storedController: `unclaimed:${claimCommitment}` };
+}
+
+function ownershipFromRegistration(registration, fallback) {
+  const stored = registration?.controller;
+  if (typeof stored !== "string" || !stored) return fallback;
+  if (stored.startsWith("unclaimed:")) {
+    return { controller: ZERO_ADDRESS, claimCommitment: stored.slice("unclaimed:".length), storedController: stored };
+  }
+  return { controller: stored, claimCommitment: ZERO_BYTES32, storedController: stored };
+}
 
 function createApp({ db, blockchain, config }) {
   const app = express();
@@ -103,14 +137,39 @@ function createApp({ db, blockchain, config }) {
       if (config.blockchainEnabled === false) {
         return res.status(503).json({ error: "Blockchain registration is unavailable" });
       }
+      const requestedOwnership = readPatientOwnership(req.body);
       const commitment = blockchain.identityCommitment(JSON.stringify(hashes), config.identityCommitmentKey);
+      if (typeof blockchain.verifySigner === "function") {
+        try {
+          const signer = await blockchain.verifySigner();
+          if (!signer?.isHospitalAdmin) {
+            return res.status(403).json({ error: "The signing account cannot register patients." });
+          }
+        } catch (error) {
+          return res.status(503).json({ error: "Blockchain registration is unavailable" });
+        }
+      }
+      if (!reviewCaseId && typeof db.findRegistrationByCommitment === "function") {
+        const prior = await db.findRegistrationByCommitment(commitment, req.user.hospital_id);
+        if (prior && prior.status === "failed" && !prior.txHash) {
+          return res.status(409).json({ error: DUPLICATE_COMMITMENT_MESSAGE });
+        }
+        if (prior && prior.status === "unknown" && prior.txHash) {
+          return res.status(202).json({ status: "registration_reconciliation_required" });
+        }
+      }
       const recovered = !reviewCaseId && db.getPendingRegistrationByCommitment
         ? await db.getPendingRegistrationByCommitment(commitment, req.user.hospital_id)
         : null;
       const pending = reviewCaseId
         ? await db.getReviewRegistration(reviewCaseId, req.user.hospital_id)
         : recovered || await db.createPendingPatient(profile, hashes, req.user.sub, req.user.hospital_id);
-      let registration = await db.beginRegistration(pending.id, req.user.hospital_id, config.controllerAddress, commitment);
+      let registration = await db.beginRegistration(pending.id, req.user.hospital_id, requestedOwnership.storedController, commitment);
+      const ownership = ownershipFromRegistration(registration, requestedOwnership);
+      if (registration.duplicateConflict) {
+        if (typeof db.closeRejectedRegistration === "function") await db.closeRejectedRegistration(pending.id, req.user.hospital_id);
+        return res.status(409).json({ error: DUPLICATE_COMMITMENT_MESSAGE });
+      }
       if (registration.status === "confirmed") {
         return res.status(200).json({ status: "confirmed", patientId: registration.patientId, did: registration.did, transaction: registration.txHash });
       }
@@ -128,12 +187,23 @@ function createApp({ db, blockchain, config }) {
           return res.status(202).json({ status: "registration_submission_in_progress" });
         }
         if (registration.status === "unknown" && await blockchain.commitmentExists(commitment)) {
+          if (!registration.txHash) {
+            await db.markRegistrationResult(registration.id, { status: "failed", error: "duplicate identity commitment" });
+            if (typeof db.closeRejectedRegistration === "function") await db.closeRejectedRegistration(pending.id, req.user.hospital_id);
+            return res.status(409).json({ error: DUPLICATE_COMMITMENT_MESSAGE });
+          }
           return res.status(202).json({ status: "registration_reconciliation_required" });
         }
         let submitted;
         try {
-          submitted = await blockchain.submitRegistration(config.controllerAddress, commitment);
+          const patientRef = `0x${crypto.randomBytes(32).toString("hex")}`;
+          submitted = await blockchain.submitRegistration(patientRef, ownership.controller, commitment, ownership.claimCommitment);
         } catch (error) {
+          if (error.statusCode === 409) {
+            await db.markRegistrationResult(registration.id, { status: "failed", error: "duplicate identity commitment" });
+            if (typeof db.closeRejectedRegistration === "function") await db.closeRejectedRegistration(pending.id, req.user.hospital_id);
+            return res.status(409).json({ error: DUPLICATE_COMMITMENT_MESSAGE });
+          }
           await db.markRegistrationResult(registration.id, {
             status: "unknown",
             error: "RPC submission outcome is uncertain"
@@ -144,7 +214,10 @@ function createApp({ db, blockchain, config }) {
         return res.status(202).json({ status: "registration_submitted", transaction: submitted.txHash });
       }
       const chain = {
+        allocatePublicId: true,
+        patientRef: registration.chainPatientId,
         patientId: registration.chainPatientId,
+        controller: registration.controller || ownership.storedController,
         did: registration.chainDid,
         txHash: registration.txHash
       };
@@ -215,6 +288,8 @@ function createApp({ db, blockchain, config }) {
     } catch (error) { next(error); }
   });
 
+  registerPatientAuth(app, { db, blockchain, config, authRateLimit });
+
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {
       await db.disableUser(req.params.id, req.user.sub, req.user.hospital_id);
@@ -228,7 +303,7 @@ function createApp({ db, blockchain, config }) {
       ? Object.assign(new Error("A staff account with this email already exists."), { statusCode: 409 })
       : error;
     console.error("request failed", publicError.message);
-    const publicStatus = [401, 403, 404, 409].includes(publicError.statusCode) ? publicError.statusCode : publicError.statusCode === 503 ? 503 : 500;
+    const publicStatus = [400, 401, 403, 404, 409].includes(publicError.statusCode) ? publicError.statusCode : publicError.statusCode === 503 ? 503 : 500;
     const publicMessage = publicStatus === 503 ? "Service unavailable" : publicStatus === 500 ? "Internal server error" : publicError.message;
     res.status(publicStatus).json({ error: publicMessage });
   });

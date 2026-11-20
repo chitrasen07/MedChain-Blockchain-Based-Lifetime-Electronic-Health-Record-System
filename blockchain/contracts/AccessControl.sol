@@ -6,11 +6,10 @@ import {PatientRegistry} from "./PatientRegistry.sol";
 import {AuditLog} from "./AuditLog.sol";
 
 /// @title RecordAccessControl
-/// @notice Patient-controlled permanent or time-limited record access grants.
-/// @dev Named RecordAccessControl to avoid colliding with OpenZeppelin AccessControl.
+/// @notice Consent grants controlled only by the patient controller.
 contract RecordAccessControl {
     struct AccessGrant {
-        string patientId;
+        bytes32 patientRef;
         address authorizedAddress;
         address grantedBy;
         uint256 grantedAt;
@@ -25,15 +24,15 @@ contract RecordAccessControl {
 
     mapping(bytes32 => AccessGrant) private grants;
 
+    bytes32 private constant ACCESS_GRANTED = keccak256("ACCESS_GRANTED");
+    bytes32 private constant ACCESS_REVOKED = keccak256("ACCESS_REVOKED");
+    bytes32 private constant ACCESS_EXPIRED = keccak256("ACCESS_EXPIRED");
+
     event AccessGranted(
-        string patientId,
-        address indexed authorizedAddress,
-        address indexed grantedBy,
-        uint256 grantedAt,
-        uint256 expiresAt
+        bytes32 indexed patientRef, address indexed authorizedAddress, address indexed grantedBy, uint256 expiresAt
     );
-    event AccessRevoked(string patientId, address indexed authorizedAddress, address indexed revokedBy);
-    event AccessExpired(string patientId, address indexed authorizedAddress, uint256 expiresAt);
+    event AccessRevoked(bytes32 indexed patientRef, address indexed authorizedAddress, address indexed revokedBy);
+    event AccessExpired(bytes32 indexed patientRef, address indexed authorizedAddress, uint256 expiresAt);
 
     error Unauthorized();
     error ZeroAddress();
@@ -51,17 +50,14 @@ contract RecordAccessControl {
         auditLog = AuditLog(auditLog_);
     }
 
-    function grantAccess(string calldata patientId, address authorizedAddress, uint256 expiresAt)
-        external
-    {
+    function grantAccess(bytes32 patientRef, address authorizedAddress, uint256 expiresAt) external {
         if (authorizedAddress == address(0)) revert ZeroAddress();
         if (expiresAt != 0 && expiresAt <= block.timestamp) revert InvalidExpiry();
-        _requireActivePatient(patientId);
-        _requireGrantAuthority(patientId);
+        _requireActivePatient(patientRef);
+        _requireController(patientRef);
 
-        bytes32 key = _key(patientId, authorizedAddress);
-        grants[key] = AccessGrant({
-            patientId: patientId,
+        grants[_key(patientRef, authorizedAddress)] = AccessGrant({
+            patientRef: patientRef,
             authorizedAddress: authorizedAddress,
             grantedBy: msg.sender,
             grantedAt: block.timestamp,
@@ -69,90 +65,52 @@ contract RecordAccessControl {
             active: true,
             exists: true
         });
-
-        emit AccessGranted(patientId, authorizedAddress, msg.sender, block.timestamp, expiresAt);
-        auditLog.recordAudit(msg.sender, patientId, "ACCESS_GRANTED", _toHex(authorizedAddress), true);
+        emit AccessGranted(patientRef, authorizedAddress, msg.sender, expiresAt);
+        auditLog.recordAudit(msg.sender, patientRef, ACCESS_GRANTED, true);
     }
 
-    function revokeAccess(string calldata patientId, address authorizedAddress) external {
-        _requireGrantAuthority(patientId);
-        AccessGrant storage grant = grants[_key(patientId, authorizedAddress)];
+    function revokeAccess(bytes32 patientRef, address authorizedAddress) external {
+        _requireController(patientRef);
+        AccessGrant storage grant = grants[_key(patientRef, authorizedAddress)];
         if (!grant.exists || !grant.active) revert NoActiveGrant();
-
         grant.active = false;
-        emit AccessRevoked(patientId, authorizedAddress, msg.sender);
-        auditLog.recordAudit(msg.sender, patientId, "ACCESS_REVOKED", _toHex(authorizedAddress), true);
+        emit AccessRevoked(patientRef, authorizedAddress, msg.sender);
+        auditLog.recordAudit(msg.sender, patientRef, ACCESS_REVOKED, true);
     }
 
-    function expireAccess(string calldata patientId, address authorizedAddress) external {
-        AccessGrant storage grant = grants[_key(patientId, authorizedAddress)];
+    function expireAccess(bytes32 patientRef, address authorizedAddress) external {
+        AccessGrant storage grant = grants[_key(patientRef, authorizedAddress)];
         if (!grant.exists || !grant.active) revert NoActiveGrant();
         if (grant.expiresAt == 0 || block.timestamp < grant.expiresAt) revert NotExpired();
-
         grant.active = false;
-        emit AccessExpired(patientId, authorizedAddress, grant.expiresAt);
+        emit AccessExpired(patientRef, authorizedAddress, grant.expiresAt);
+        auditLog.recordAudit(msg.sender, patientRef, ACCESS_EXPIRED, true);
     }
 
-    function hasAccess(string calldata patientId, address account) public view returns (bool) {
-        if (!patientRegistry.isActivePatient(patientId)) return false;
-        AccessGrant storage grant = grants[_key(patientId, account)];
+    function hasAccess(bytes32 patientRef, address account) public view returns (bool) {
+        if (!patientRegistry.isActivePatient(patientRef)) return false;
+        AccessGrant storage grant = grants[_key(patientRef, account)];
         if (!grant.exists || !grant.active) return false;
         if (grant.expiresAt != 0 && block.timestamp >= grant.expiresAt) return false;
         return true;
     }
 
-    function getAccessExpiry(string calldata patientId, address account) external view returns (uint256) {
-        AccessGrant storage grant = grants[_key(patientId, account)];
+    function getAccessExpiry(bytes32 patientRef, address account) external view returns (uint256) {
+        AccessGrant storage grant = grants[_key(patientRef, account)];
         if (!grant.exists) revert NoActiveGrant();
         return grant.expiresAt;
     }
 
-    function getAccess(string calldata patientId, address account)
-        external
-        view
-        returns (
-            address authorizedAddress,
-            address grantedBy,
-            uint256 grantedAt,
-            uint256 expiresAt,
-            bool active
-        )
-    {
-        AccessGrant storage grant = grants[_key(patientId, account)];
-        if (!grant.exists) revert NoActiveGrant();
-        bool currentlyActive = grant.active
-            && (grant.expiresAt == 0 || block.timestamp < grant.expiresAt)
-            && patientRegistry.isActivePatient(patientId);
-        return (grant.authorizedAddress, grant.grantedBy, grant.grantedAt, grant.expiresAt, currentlyActive);
+    function _requireActivePatient(bytes32 patientRef) internal view {
+        if (!patientRegistry.isActivePatient(patientRef)) revert PatientInactive();
     }
 
-    function _requireActivePatient(string calldata patientId) internal view {
-        if (!patientRegistry.isActivePatient(patientId)) revert PatientInactive();
+    function _requireController(bytes32 patientRef) internal view {
+        address controller = patientRegistry.getController(patientRef);
+        if (controller == address(0) || msg.sender != controller) revert Unauthorized();
     }
 
-    function _requireGrantAuthority(string calldata patientId) internal view {
-        address controller = patientRegistry.getController(patientId);
-        if (msg.sender == controller || roleManager.isHospitalAdmin(msg.sender)) {
-            return;
-        }
-        revert Unauthorized();
-    }
-
-    function _key(string calldata patientId, address account) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(patientId, account));
-    }
-
-    function _toHex(address account) internal pure returns (string memory) {
-        bytes16 hexSymbols = "0123456789abcdef";
-        bytes20 data = bytes20(account);
-        bytes memory str = new bytes(42);
-        str[0] = "0";
-        str[1] = "x";
-        for (uint256 i = 0; i < 20; i++) {
-            uint8 b = uint8(data[i]);
-            str[2 + i * 2] = hexSymbols[b >> 4];
-            str[3 + i * 2] = hexSymbols[b & 0x0f];
-        }
-        return string(str);
+    function _key(bytes32 patientRef, address account) internal pure returns (bytes32) {
+        return keccak256(abi.encode(patientRef, account));
     }
 }

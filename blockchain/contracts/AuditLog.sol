@@ -4,13 +4,14 @@ pragma solidity ^0.8.24;
 import {RoleManager} from "./RoleManager.sol";
 
 /// @title AuditLog
-/// @notice Append-only on-chain audit trail. Entries cannot be updated or deleted.
+/// @notice Append-only commitments for on-chain actions. Detailed audit text stays off-chain.
+/// @dev Every stored field is public to anyone who reads the chain. This contract does not
+/// provide confidentiality.
 contract AuditLog {
     struct AuditEntry {
         address actor;
-        string patientId;
-        string action;
-        string resourceId;
+        bytes32 subject;
+        bytes32 actionCode;
         uint256 timestamp;
         bool success;
     }
@@ -22,9 +23,8 @@ contract AuditLog {
     event AuditRecorded(
         uint256 indexed entryId,
         address indexed actor,
-        string patientId,
-        string action,
-        string resourceId,
+        bytes32 indexed subject,
+        bytes32 actionCode,
         uint256 timestamp,
         bool success
     );
@@ -37,7 +37,6 @@ contract AuditLog {
     constructor(address roleManager_) {
         if (roleManager_ == address(0)) revert ZeroAddress();
         roleManager = RoleManager(roleManager_);
-        authorizedLoggers[msg.sender] = true;
     }
 
     modifier onlySuperAdmin() {
@@ -51,29 +50,24 @@ contract AuditLog {
         emit LoggerAuthorized(logger, authorized, msg.sender);
     }
 
-    function recordAudit(
-        address actor,
-        string calldata patientId,
-        string calldata action,
-        string calldata resourceId,
-        bool success
-    ) external returns (uint256 entryId) {
+    function recordAudit(address actor, bytes32 subject, bytes32 actionCode, bool success)
+        external
+        returns (uint256 entryId)
+    {
         if (!authorizedLoggers[msg.sender]) revert Unauthorized();
-        if (bytes(action).length == 0) revert InvalidEntry();
+        if (actionCode == bytes32(0)) revert InvalidEntry();
 
         entryId = entries.length;
         entries.push(
             AuditEntry({
                 actor: actor,
-                patientId: patientId,
-                action: action,
-                resourceId: resourceId,
+                subject: subject,
+                actionCode: actionCode,
                 timestamp: block.timestamp,
                 success: success
             })
         );
-
-        emit AuditRecorded(entryId, actor, patientId, action, resourceId, block.timestamp, success);
+        emit AuditRecorded(entryId, actor, subject, actionCode, block.timestamp, success);
     }
 
     function totalEntries() external view returns (uint256) {
@@ -83,17 +77,10 @@ contract AuditLog {
     function getEntry(uint256 entryId)
         external
         view
-        returns (
-            address actor,
-            string memory patientId,
-            string memory action,
-            string memory resourceId,
-            uint256 timestamp,
-            bool success
-        )
+        returns (address actor, bytes32 subject, bytes32 actionCode, uint256 timestamp, bool success)
     {
         if (entryId >= entries.length) revert InvalidEntry();
         AuditEntry storage entry = entries[entryId];
-        return (entry.actor, entry.patientId, entry.action, entry.resourceId, entry.timestamp, entry.success);
+        return (entry.actor, entry.subject, entry.actionCode, entry.timestamp, entry.success);
     }
 }

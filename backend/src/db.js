@@ -90,6 +90,19 @@ function createDb(config) {
       );
       return result.rows[0] || null;
     },
+    async findRegistrationByCommitment(identityCommitment, hospitalId) {
+      const result = await query(
+        "SELECT r.status, r.tx_hash AS \"txHash\", r.last_error AS \"lastError\", r.patient_id AS \"patientId\", p.patient_id AS \"publicId\", r.did_on_chain AS did FROM registration_transactions r JOIN patients p ON p.id=r.patient_id WHERE r.identity_commitment=$1 AND r.hospital_id=$2 ORDER BY r.updated_at DESC LIMIT 1",
+        [identityCommitment, hospitalId]
+      );
+      return result.rows[0] || null;
+    },
+    async closeRejectedRegistration(patientId, hospitalId) {
+      await query(
+        "UPDATE patients SET status='registration_failed', updated_at=now() WHERE id=$1 AND hospital_id=$2 AND status='pending'",
+        [patientId, hospitalId]
+      );
+    },
     async createReviewCase(profile, hashes, candidates, actorId, hospitalId) {
       return transaction(async (client) => {
         const requestFingerprint = crypto.createHash("sha256").update(JSON.stringify(hashes)).digest("hex");
@@ -116,21 +129,38 @@ function createDb(config) {
       });
     },
     async confirmPatient(id, chain, actorId, hospitalId) {
-      const result = await query("UPDATE patients SET patient_id=$1,did=$2,blockchain_tx_hash=$3,status='confirmed',updated_at=now() WHERE id=$4 AND hospital_id=$5 AND status='pending' RETURNING patient_id,did,blockchain_tx_hash AS \"txHash\"", [chain.patientId, chain.did, chain.txHash, id, hospitalId]);
-      if (!result.rowCount) throw new Error("Pending registration was not found");
-      await query("INSERT INTO audit_events (actor_id,action,resource_id,metadata) VALUES ($1,'PATIENT_REGISTERED',$2,$3)", [actorId, id, JSON.stringify({ transaction: chain.txHash })]);
-      return result.rows[0];
+      return transaction(async (client) => {
+        let publicId = chain.patientId;
+        if (chain.allocatePublicId) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext('medchain-patient-public-id'))");
+          const next = await client.query("SELECT COALESCE(MAX(CAST(SUBSTRING(patient_id FROM 9) AS INTEGER)), 0) + 1 AS n FROM patients WHERE patient_id ~ '^PATIENT-[0-9]+$'");
+          publicId = `PATIENT-${String(next.rows[0].n).padStart(6, "0")}`;
+        }
+        const chainRef = chain.patientRef || chain.did || null;
+        const controller = chain.controller && !String(chain.controller).startsWith("unclaimed") ? chain.controller : null;
+        const result = await client.query(
+          "UPDATE patients SET patient_id=$1,did=$2,controller=$3,blockchain_tx_hash=$4,status='confirmed',updated_at=now() WHERE id=$5 AND hospital_id=$6 AND status='pending' RETURNING patient_id,did,blockchain_tx_hash AS \"txHash\"",
+          [publicId, chainRef, controller, chain.txHash, id, hospitalId]
+        );
+        if (!result.rowCount) throw new Error("Pending registration was not found");
+        await client.query("INSERT INTO audit_events (actor_id,action,resource_id,metadata) VALUES ($1,'PATIENT_REGISTERED',$2,$3)", [actorId, id, JSON.stringify({ transaction: chain.txHash })]);
+        return { patientId: result.rows[0].patient_id, did: result.rows[0].did, txHash: result.rows[0].txHash };
+      });
     },
     async beginRegistration(patientId, hospitalId, controller, identityCommitment) {
       return transaction(async (client) => {
         const existing = await client.query(
-          "SELECT id,status,tx_hash AS \"txHash\",patient_id_on_chain AS \"patientId\",did_on_chain AS did,last_error AS \"lastError\" FROM registration_transactions WHERE patient_id=$1 AND hospital_id=$2 FOR UPDATE",
+          "SELECT id,status,tx_hash AS \"txHash\",patient_id_on_chain AS \"patientId\",did_on_chain AS did,controller,last_error AS \"lastError\" FROM registration_transactions WHERE patient_id=$1 AND hospital_id=$2 FOR UPDATE",
           [patientId, hospitalId]
         );
         if (existing.rowCount) {
-          if (existing.rows[0].status === "unknown" || existing.rows[0].status === "failed") {
+          const current = existing.rows[0];
+          if (current.status === "failed" && !current.txHash && current.lastError === "duplicate identity commitment") {
+            return { ...current, claimed: false, duplicateConflict: true };
+          }
+          if (current.status === "unknown" || current.status === "failed") {
             const claimed = await client.query(
-              "UPDATE registration_transactions SET status='submitting',updated_at=now() WHERE id=$1 RETURNING id,status,tx_hash AS \"txHash\"",
+              "UPDATE registration_transactions SET status='submitting',updated_at=now() WHERE id=$1 RETURNING id,status,tx_hash AS \"txHash\",controller",
               [existing.rows[0].id]
             );
             return { ...claimed.rows[0], claimed: true };
@@ -239,6 +269,40 @@ function createDb(config) {
       );
       if (!result.rowCount) throw Object.assign(new Error("Registration review is not ready"), { statusCode: 409 });
       return result.rows[0];
+    },
+    async findConfirmedPatientForAuth(publicId) {
+      const result = await query(
+        "SELECT p.id, p.patient_id AS \"patientId\", p.did, p.hospital_id, p.status, r.controller AS \"registrationController\" FROM patients p LEFT JOIN registration_transactions r ON r.patient_id = p.id WHERE p.patient_id = $1 AND p.status = 'confirmed'",
+        [publicId]
+      );
+      return result.rows[0] || null;
+    },
+    async getPatientForAuth(id) {
+      const result = await query(
+        "SELECT id, patient_id AS \"patientId\", did, status, hospital_id, blockchain_tx_hash AS \"txHash\", pii_ciphertext AS \"piiCiphertext\", created_at AS \"createdAt\" FROM patients WHERE id = $1 AND status = 'confirmed'",
+        [id]
+      );
+      return result.rows[0] || null;
+    },
+    async createPatientChallenge({ patientId, walletAddress, nonce, message, expiresAt }) {
+      await query(
+        "INSERT INTO patient_auth_challenges (patient_id, wallet_address, nonce, message, expires_at) VALUES ($1,$2,$3,$4,$5)",
+        [patientId, walletAddress, nonce, message, expiresAt]
+      );
+    },
+    async consumePatientChallenge(nonce) {
+      const result = await query(
+        "UPDATE patient_auth_challenges AS challenge SET used_at = now() FROM patients WHERE challenge.nonce = $1 AND challenge.used_at IS NULL AND challenge.expires_at > now() AND patients.id = challenge.patient_id AND patients.status = 'confirmed' RETURNING challenge.patient_id AS \"patientId\", challenge.wallet_address AS \"walletAddress\", challenge.message, patients.patient_id AS \"publicPatientId\"",
+        [nonce]
+      );
+      return result.rows[0] || null;
+    },
+    async listPatientVisits(patientId) {
+      const result = await query(
+        "SELECT id, record_reference AS \"recordReference\", record_hash AS \"recordHash\", created_at AS \"createdAt\" FROM visits WHERE patient_id = $1 ORDER BY created_at ASC",
+        [patientId]
+      );
+      return result.rows;
     },
     async close() { await pool.end(); }
   };

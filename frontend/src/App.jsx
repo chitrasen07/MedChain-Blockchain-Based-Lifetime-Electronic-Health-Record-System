@@ -14,7 +14,16 @@ import { DoctorLookupPage, DoctorOverviewPage, DoctorVisitsPage } from "./pages/
 import { EmergencyDashboardPage } from "./pages/emergency/EmergencyDashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
-import { PatientDashboardPage } from "./pages/patient/PatientDashboardPage";
+import { PatientLoginPage } from "./pages/patient/PatientLoginPage";
+import {
+  PatientAccessPage,
+  PatientDashboardPage,
+  PatientHistoryPage,
+  PatientIdentityPage,
+  PatientOwnershipPage,
+  PatientProfilePage,
+  PatientRecordsPage,
+} from "./pages/patient/PatientPortalPages";
 import {
   ReceptionistLookupPage,
   ReceptionistMatchingPage,
@@ -32,6 +41,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<WelcomePage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/patient/login" element={<PatientLoginPage />} />
         <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
         <Route element={<ProtectedRoute allow="administrator" />}>
@@ -76,8 +86,16 @@ export default function App() {
           </Route>
         </Route>
 
-        <Route element={<AppLayout workspace={workspaces.patient} />}>
-          <Route path="/patient" element={<PatientDashboardPage />} />
+        <Route element={<ProtectedRoute allow="patient" />}>
+          <Route element={<AppLayout workspace={workspaces.patient} />}>
+            <Route path="/patient" element={<PatientDashboardPage />} />
+            <Route path="/patient/identity" element={<PatientIdentityPage />} />
+            <Route path="/patient/ownership" element={<PatientOwnershipPage />} />
+            <Route path="/patient/history" element={<PatientHistoryPage />} />
+            <Route path="/patient/records" element={<PatientRecordsPage />} />
+            <Route path="/patient/access" element={<PatientAccessPage />} />
+            <Route path="/patient/profile" element={<PatientProfilePage />} />
+          </Route>
         </Route>
         <Route element={<AppLayout workspace={workspaces.emergency} />}>
           <Route path="/emergency" element={<EmergencyDashboardPage />} />

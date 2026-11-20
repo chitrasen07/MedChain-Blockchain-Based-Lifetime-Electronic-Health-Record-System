@@ -1,11 +1,14 @@
 const crypto = require("node:crypto");
-const { Contract, FetchRequest, JsonRpcProvider, Wallet } = require("ethers");
+const { Contract, FetchRequest, JsonRpcProvider, Wallet, id } = require("ethers");
 
+const DUPLICATE_COMMITMENT_SELECTOR = id("IdentityCommitmentAlreadyExists()").slice(0, 10);
 const ABI = [
-  "function registerPatient(address controller) returns (string patientId)",
-  "function registerPatientWithIdentityCommitment(address controller, bytes32 identityCommitment) returns (string patientId)",
+  "function registerPatient(bytes32 patientRef,address controller,bytes32 identityCommitment,bytes32 claimCommitment)",
   "function identityCommitmentExists(bytes32 identityCommitment) view returns (bool)",
-  "event PatientRegistered(string patientId,string did,address indexed controller,uint256 registeredAt)"
+  "function patientForCommitment(bytes32 identityCommitment) view returns (bytes32)",
+  "function getController(bytes32 patientRef) view returns (address)",
+  "error IdentityCommitmentAlreadyExists()",
+  "event PatientRegistered(bytes32 indexed patientRef,bytes32 indexed identityCommitment,address controller,uint256 registeredAt)"
 ];
 const ROLE_ABI = [
   "function roleManager() view returns (address)",
@@ -20,6 +23,20 @@ function blockchainUnavailable() {
   return error;
 }
 
+function duplicateCommitmentConflict(error) {
+  if (!error) return false;
+  if (error.revert?.name === "IdentityCommitmentAlreadyExists") return true;
+  const data = typeof error.data === "string" ? error.data : "";
+  return data.startsWith(DUPLICATE_COMMITMENT_SELECTOR);
+}
+
+function duplicateCommitmentError() {
+  const error = new Error("A patient with this identity commitment is already registered.");
+  error.statusCode = 409;
+  error.code = "DUPLICATE_COMMITMENT";
+  return error;
+}
+
 // Database-only development. No provider, wallet, or transaction is created.
 function createDisabledBlockchainAdapter() {
   const reject = async () => { throw blockchainUnavailable(); };
@@ -30,7 +47,8 @@ function createDisabledBlockchainAdapter() {
     submitRegistration: reject,
     reconcileRegistration: reject,
     commitmentExists: reject,
-    verifySigner: reject
+    verifySigner: reject,
+    getController: reject
   };
 }
 
@@ -50,23 +68,32 @@ if (config.thirdwebSecretKey) {
 const provider = new JsonRpcProvider(request);
   const wallet = new Wallet(config.privateKey, provider);
   const contract = new Contract(config.registryAddress, ABI, wallet);
+  const reader = new Contract(config.registryAddress, ABI, provider);
   const parseReceipt = (receipt) => {
     const event = receipt.logs.map((log) => {
       try { return contract.interface.parseLog(log); } catch { return null; }
     }).find((parsed) => parsed && parsed.name === "PatientRegistered");
     if (!event) throw new Error("PatientRegistered event was not found");
-    return { patientId: event.args.patientId, did: event.args.did, txHash: receipt.hash };
+    return {
+      patientId: event.args.patientRef,
+      did: event.args.patientRef,
+      controller: event.args.controller,
+      txHash: receipt.hash
+    };
   };
   return {
-    async registerPatient(controller, commitment) {
-      const tx = await this.submitRegistration(controller, commitment);
+    async registerPatient(patientRef, controller, commitment, claimCommitment) {
+      const tx = await this.submitRegistration(patientRef, controller, commitment, claimCommitment);
       return this.reconcileRegistration(tx.txHash);
     },
-    async submitRegistration(controller, commitment) {
-      const tx = commitment
-        ? await contract.registerPatientWithIdentityCommitment(controller, commitment)
-        : await contract.registerPatient(controller);
-      return { txHash: tx.hash };
+    async submitRegistration(patientRef, controller, commitment, claimCommitment) {
+      try {
+        const tx = await contract.registerPatient(patientRef, controller, commitment, claimCommitment);
+        return { txHash: tx.hash };
+      } catch (error) {
+        if (duplicateCommitmentConflict(error)) throw duplicateCommitmentError();
+        throw error;
+      }
     },
     async reconcileRegistration(txHash) {
       const receipt = await provider.getTransactionReceipt(txHash);
@@ -76,6 +103,9 @@ const provider = new JsonRpcProvider(request);
     },
     async commitmentExists(commitment) {
       return contract.identityCommitmentExists(commitment);
+    },
+    async getController(patientRef) {
+      return reader.getController(patientRef);
     },
     async verifySigner() {
       const registry = new Contract(config.registryAddress, [...ABI, ...ROLE_ABI], provider);
@@ -95,4 +125,4 @@ const provider = new JsonRpcProvider(request);
   };
 }
 
-module.exports = { createBlockchainAdapter, ABI, ROLE_ABI };
+module.exports = { createBlockchainAdapter, duplicateCommitmentConflict, ABI, ROLE_ABI };

@@ -1,148 +1,106 @@
 # MedChain
 
-MedChain is a blockchain integrity and permissions layer for a lifetime
-electronic health record system. Clinical data and demographic details remain
-off-chain.
+MedChain keeps a lifetime patient record in PostgreSQL and uses Ethereum only
+for opaque references, identity commitments, record hashes, permissions, and
+audit codes. Names, contact details, clinical text, and recovery secrets stay
+off the chain.
 
 ## Architecture
 
-- [`blockchain/`](./blockchain) contains the Hardhat Solidity contracts,
-  deployment scripts, and contract tests.
-- [`backend/`](./backend) contains the authorized Node.js/Express API,
-  PostgreSQL migration, encrypted profile storage, matching, audit metadata,
-  and the server-side `PatientRegistry` adapter.
-- No frontend is present in this repository yet.
+- `frontend/` is the React staff application. Staff sign in against the API.
+  The administrator registration screen can supply a patient wallet or a
+  browser-generated ownership recovery code. Only the claim commitment is sent
+  to the API.
+- `backend/` is the Express API. It encrypts profiles, matches identity hashes,
+  and submits patient registration through the Sepolia `PatientRegistry`.
+- `blockchain/` contains the six Solidity contracts, local tests, and
+  `scripts/deploy.js`. The deployed Sepolia addresses are in
+  `blockchain/deployments/sepolia.json`.
 
-The backend never accepts government identifiers. It stores the patient profile
-encrypted with an application key and stores keyed HMACs of normalized fields
-for matching. A stable identity commitment is sent to the existing registry
-only by the backend signer; raw names, dates of birth, contact details, and
-medical records are not sent on-chain.
+Application roles are administrator, doctor, receptionist, hospital staff, and
+reviewer. Chain roles are separate and are not assigned by an API login.
 
 ## Local setup
 
-1. Install PostgreSQL 14 or newer and create an application database and
-   least-privilege application role. For a local installation:
-
-   ```sql
-   CREATE ROLE medchain LOGIN PASSWORD 'set-this-outside-source-control';
-   CREATE DATABASE medchain OWNER medchain;
-   ```
-
-   Do not use this sample password outside a local setup, and do not commit it.
-2. Copy `backend/.env.example` to `backend/.env`, fill in `DATABASE_URL` and
-   the other placeholders using a secret manager or local-only file.
-3. Install and migrate the backend:
+1. Install PostgreSQL and create an application database and role. Do not commit
+   the password.
+2. Copy `backend/.env.example` to `backend/.env`. Set `DATABASE_URL`,
+   `JWT_SECRET`, `BOOTSTRAP_SECRET`, `IDENTITY_COMMITMENT_KEY`, and a 64-hex
+   `PII_ENCRYPTION_KEY`.
+3. From `backend/`:
 
    ```bash
-   cd backend
    npm install
    npm run migrate
    npm test
    npm start
    ```
 
-   `npm run migrate` discovers numbered SQL files, applies them in order inside
-   one transaction, records checksums in `schema_migrations`, and refuses to
-   run if an applied migration was changed. The migration requires permission
-   to create the `pgcrypto` extension for UUID generation; a database
-   administrator may install it once with `CREATE EXTENSION pgcrypto` if the
-   application role cannot do so.
-
-   Migration `004_registration_transactions.sql` stores lifecycle metadata,
-   transaction hashes, and contract-returned identifiers. It does not make
-   PostgreSQL and blockchain operations atomic.
-
-4. For the local chain, use the commands in [`blockchain/README.md`](./blockchain/README.md)
-   and set `RPC_URL`, `PATIENT_REGISTRY_ADDRESS`, `BLOCKCHAIN_PRIVATE_KEY`,
-   and `CONTROLLER_ADDRESS` to an authorized local deployment account/address.
-   Run the read-only signer diagnostic:
+   Migrations `001` through `005` are applied in filename order. A changed
+   applied migration is rejected. `BLOCKCHAIN_ENABLED=false` starts the API
+   without a wallet. Registration then returns HTTP 503 and writes nothing.
+4. Copy `frontend/.env.example` to `frontend/.env` with
+   `VITE_API_URL=http://localhost:3000`. From `frontend/`:
 
    ```bash
-   npm run diagnose:signer
+   npm install
+   npm test
+   npm run dev
    ```
 
-   It verifies the configured signer, registry, connected `RoleManager`, and
-   hospital-admin role without printing the private key or changing on-chain
-   permissions. If it fails, manually verify the deployment addresses and
-   assign the role through an already authorized administrator.
+   Open `http://localhost:5173`.
+5. Contract tests and a local node run from `blockchain/`:
 
-   Set `BLOCKCHAIN_ENABLED=false` to run against PostgreSQL without a chain.
-   Startup then does not require the four blockchain variables and does not
-   create a signing wallet. Matching, staff authentication, staff management,
-   visits, and review decisions other than `different_person` stay available.
-   A new patient registration, or a `different_person` review decision, returns
-   HTTP 503 `Blockchain registration is unavailable` and writes no pending
-   registration. Omit the flag, or set it to `true`, for a normal deployment:
-   the blockchain variables are required, and a missing value stops startup.
+   ```bash
+   npm install
+   npx hardhat test
+   npx hardhat node
+   npx hardhat run scripts/deploy.js --network localhost
+   ```
 
-Required secrets are `JWT_SECRET`, `IDENTITY_COMMITMENT_KEY`, and
-`PII_ENCRYPTION_KEY` (64 hex characters). Do not commit `.env` files or real
-patient data. Rotate identity and encryption keys through an approved key
-management process; this initial implementation does not provide key rotation
-or cross-hospital federation.
+   Local compilation does not require Sepolia credentials.
 
-## API
+## Sepolia
 
-- `GET /health` and `GET /ready` (`503 Service unavailable` when PostgreSQL is
-  unreachable)
-- `POST /auth/token`
-- `POST /auth/bootstrap` (one-time, protected by `BOOTSTRAP_SECRET`; creates
-  the first hospital and administrator)
-- `GET /admin/users` (hospital administrator only)
-- `POST /admin/users` (hospital administrator only; creates receptionist,
-  doctor, reviewer, or hospital staff accounts in the administrator's hospital)
-- `POST /admin/users/:id/disable` (hospital administrator only)
-- `POST /patients/match` (authenticated staff)
-- `POST /patients` (administrator; high-confidence matches reuse the existing
-  Patient ID, possible matches create a review case, and only no-match or
-  approved different-person requests reach `PatientRegistry`)
-- `GET /patients/:patientId` (authenticated staff)
-- `POST /patients/:patientId/visits` (authenticated staff)
-- `POST /review-cases/:id/decision` (reviewer or administrator; accepts
-  `same_patient`, `different_person`, or `reject`)
-- `GET /review-cases` and `GET /review-cases/:id` (reviewer or administrator)
+The hardened contracts are already deployed. Use the addresses in
+`blockchain/deployments/sepolia.json`. Do not redeploy them and do not use
+mainnet.
 
-User authentication checks the current database status on every request, so
-disabling a user invalidates previously issued tokens. Patient, visit, review,
-and user queries include the authenticated user's hospital boundary. Migration
-`002_hospital_authorization.sql` adds the hospitals table, active/disabled
-statuses, reviewer role, and hospital foreign-key relationships without
-editing migration `001_initial.sql`.
+Enabled mode requires `RPC_URL`, `PATIENT_REGISTRY_ADDRESS`, and
+`BLOCKCHAIN_PRIVATE_KEY` for the hospital-administrator signer. Patient
+controllers are supplied per registration. There is no shared controller.
+Keep the signer key in `backend/.env`, which is gitignored.
 
-Matching returns `high_confidence`, `possible_match`, or `no_match`; it does
-not guarantee duplicate prevention. Possible matches are stored in migration
-`003_matching_review_workflow.sql` as hospital-scoped review cases. Candidate
-references are internal UUIDs; review responses do not include encrypted
-profiles or demographic fields. A pending case cannot submit a blockchain
-registration. Reviewers can link the request to an existing patient, reject
-it, or mark it as a different person; the latter reuses the pending request for
-the subsequent authorized registration.
+A registration stores an opaque `bytes32` reference on-chain and allocates
+`PATIENT-######` in PostgreSQL. A patient without a wallet is registered with
+a claim commitment. The recovery secret is generated in the browser and is not
+stored by the API.
 
-The review transaction uses a database row lock and a hospital/request
-fingerprint uniqueness constraint so repeated decisions are idempotent and
-concurrent ambiguous requests share one pending case. Database and blockchain
-operations are still not atomic.
+## Implemented behavior
 
-Registration lifecycle states are `submitting`, `submitted`, `confirmed`,
-`failed`, and `unknown`. A database claim in `submitting` prevents concurrent
-requests from submitting duplicate transactions. The backend persists the transaction hash before waiting for a
-receipt. A later request reconciles the original hash and event before any
-retry. Unknown attempts are not blindly resubmitted; if the commitment is
-already present on-chain, manual reconciliation is required.
-
-Recovery procedure:
-
-1. Inspect the registration row and original transaction hash.
-2. Query the configured RPC for the original receipt.
-3. If `PatientRegistered` is present, let the backend reconciliation path
-   confirm the row.
-4. If the receipt reverted, verify commitment state and deployment before an
-   administrator-approved retry.
-5. If no hash was persisted after a process crash, do not resubmit until the
-   commitment and deployment state have been checked.
+- Staff authentication, hospital-scoped roles, and one-time bootstrap.
+- Patient matching, review, and administrator registration.
+- Append-only record hashes, consent grants by the patient controller, and
+  time-bounded emergency access in the contracts.
+- Duplicate identity commitments return HTTP 409 and are not submitted again.
+- An unknown submission that already has a transaction hash stays on that hash.
+- Confirmed registrations show the lifetime ID, opaque reference, transaction
+  hash, and a Sepolia Etherscan link.
+- Patients sign in with a one-time wallet signature checked against the Sepolia
+  controller. A recovery code is checked in the browser and is not sent to the
+  API. The portal does not submit the on-chain claim.
 
 ## Tests
 
-Run blockchain tests with `npm test` from `blockchain/` (the current suite has
-42 passing tests). Run backend unit tests with `npm test` from `backend/`.
+From `blockchain/`, `npx hardhat test` runs 42 local contract tests. From
+`backend/`, `npm test` runs 44 tests. From `frontend/`, `npm test` runs 15
+tests, `npm run lint` runs oxlint, and `npm run build` creates the production
+bundle.
+
+## Limits
+
+The API does not yet call the access, emergency, or medical-record contracts.
+Chain roles are not issued from staff login. A lost controller cannot be
+recovered unless that controller stored a recovery commitment beforehand.
+Logout does not revoke a token before its 15-minute expiry. Patient and
+emergency workspaces have no API role.

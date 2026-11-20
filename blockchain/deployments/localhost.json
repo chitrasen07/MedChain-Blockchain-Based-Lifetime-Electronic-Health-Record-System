@@ -1,0 +1,80 @@
+{
+  "network": "localhost",
+  "chainId": 31337,
+  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "hospitalAdmin": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "contracts": {
+    "RoleManager": {
+      "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "transactionHash": "0xfbc864e05d090eb477a6c11f79d059972e362eda3cc007480f147b911609b57b",
+      "gasUsed": "1001558",
+      "bytecodeMetadataMatches": true
+    },
+    "AuditLog": {
+      "address": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+      "transactionHash": "0x441f1e20644c992759f2bf9a6f825d2f22e393acd6581444af76890671053e52",
+      "gasUsed": "432857",
+      "bytecodeMetadataMatches": true
+    },
+    "PatientRegistry": {
+      "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+      "transactionHash": "0xd5e9c934afc229b8a885cc17767b766e6f09444f62c2fff2c8c5eba5b4989db7",
+      "gasUsed": "1291409",
+      "bytecodeMetadataMatches": true
+    },
+    "RecordAccessControl": {
+      "address": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+      "transactionHash": "0x637f2104459573c04dcd51394e45bf5ce12403bea148a85d187b32bd9679ddce",
+      "gasUsed": "649265",
+      "bytecodeMetadataMatches": true
+    },
+    "EmergencyAccess": {
+      "address": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+      "transactionHash": "0xd9f95a8264d0d46bf26de1f796934bb814e613764a2d805966f55945c6033675",
+      "gasUsed": "792699",
+      "bytecodeMetadataMatches": true
+    },
+    "MedicalRecordRegistry": {
+      "address": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
+      "transactionHash": "0x06093fb3e28cf1176fbe150eca5d096184c0e8432951c41c78bf90b8a5535218",
+      "gasUsed": "925303",
+      "bytecodeMetadataMatches": true
+    }
+  },
+  "auditLoggers": [
+    {
+      "logger": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+      "transactionHash": "0xe01faa944ae321016536fb296948189c6c93c286f0c245efe918483f08fdb8ff",
+      "gasUsed": "52455"
+    },
+    {
+      "logger": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+      "transactionHash": "0xfaea37c728fcd2b4989a5d5962be5fe756575e93494e9a049ccef52779c136f1",
+      "gasUsed": "52455"
+    },
+    {
+      "logger": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+      "transactionHash": "0xe997a697f3cc4420fdd40b505616df91ec3d8f0298bd5eecd6b510f0346dccab",
+      "gasUsed": "52443"
+    },
+    {
+      "logger": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
+      "transactionHash": "0x1b6bb5c81b450d2ffb8c893b0b03c36821bb92e3be733e4cb780d28f7ed3e1f2",
+      "gasUsed": "52455"
+    }
+  ],
+  "hospitalAdminTransaction": {
+    "transactionHash": "0xaaa347e214a65caabfc252003495fc1f0dfdcd0f64e59db991f55b476aa2232a",
+    "gasUsed": "51446"
+  },
+  "dependencies": {
+    "auditLogRoleManager": true,
+    "patientRegistryRoleManager": true,
+    "patientRegistryAuditLog": true,
+    "recordAccessPatientRegistry": true,
+    "emergencyAccessPatientRegistry": true,
+    "medicalRecordAccess": true,
+    "medicalEmergencyAccess": true
+  },
+  "totalGasUsed": "5354345"
+}

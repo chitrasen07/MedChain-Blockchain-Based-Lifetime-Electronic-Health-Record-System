@@ -1,11 +1,15 @@
 import {
   ClipboardList,
   FileSearch,
+  Fingerprint,
   GitCompare,
+  KeyRound,
   LayoutDashboard,
   Search,
+  ShieldCheck,
   Stethoscope,
   UserPlus,
+  UserRound,
   Users,
 } from "lucide-react";
 
@@ -71,8 +75,16 @@ export const workspaces = {
     id: "patient",
     title: "Patient",
     base: "/patient",
-    pending: true,
-    nav: [{ label: "Overview", to: "/patient", end: true, icon: LayoutDashboard }],
+    pending: false,
+    nav: [
+      { label: "Dashboard", to: "/patient", end: true, icon: LayoutDashboard },
+      { label: "Health identity", to: "/patient/identity", icon: Fingerprint },
+      { label: "Ownership", to: "/patient/ownership", icon: KeyRound },
+      { label: "Visit history", to: "/patient/history", icon: ClipboardList },
+      { label: "Medical records", to: "/patient/records", icon: FileSearch },
+      { label: "Access", to: "/patient/access", icon: ShieldCheck },
+      { label: "Profile", to: "/patient/profile", icon: UserRound },
+    ],
   },
   emergency: {
     id: "emergency",
@@ -357,11 +369,9 @@ export const pages = {
     eyebrow: "Patient",
     title: "Patient workspace",
     description:
-      "Backend integration pending. The current API has no patient role and no patient login. This layout is not connected to records, permissions, or a wallet.",
-    kind: "pending",
-    pendingTitle: "Backend integration pending",
-    pendingMessage:
-      "Patient sign-in is not supported. The staff API roles are receptionist, hospital staff, doctor, reviewer, and administrator.",
+      "Patient sign-in uses a wallet signature. Medical records and access permissions remain awaiting integration.",
+    kind: "overview",
+    items: [],
   },
   emergency: {
     eyebrow: "Emergency Staff",

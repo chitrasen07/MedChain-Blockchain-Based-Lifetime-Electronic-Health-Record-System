@@ -118,7 +118,14 @@ async function main() {
   console.log("Admin is hospital admin:", await roleManager.isHospitalAdmin(admin.address));
 
   heading("2. PATIENT REGISTRATION");
-  const registration = await patientRegistry.connect(admin).registerPatient(patient.address);
+  const patientRef = hre.ethers.hexlify(hre.ethers.randomBytes(32));
+  const identityCommitment = hre.ethers.keccak256(hre.ethers.toUtf8Bytes(`demo-identity-${patientRef}`));
+  const registration = await patientRegistry.connect(admin).registerPatient(
+    patientRef,
+    patient.address,
+    identityCommitment,
+    hre.ethers.ZeroHash
+  );
   const registrationReceipt = await registration.wait();
   const registrationEvent = registrationReceipt.logs
     .map((log) => {
@@ -129,15 +136,14 @@ async function main() {
       }
     })
     .find((parsed) => parsed && parsed.name === "PatientRegistered");
-  const patientId = registrationEvent.args.patientId;
+  const patientId = registrationEvent.args.patientRef;
   const exists = await patientRegistry.patientExists(patientId);
   const patientInfo = await patientRegistry.getPatient(patientId);
   results.patient =
     status("Patient registered", exists) &&
     status("Patient exists", exists) &&
     status("Patient active", patientInfo.active);
-  console.log("Patient ID:", patientInfo.id);
-  console.log("DID:", patientInfo.did);
+  console.log("Opaque patient reference:", patientId);
   console.log("Controller:", patientInfo.controller);
 
   heading("3. ACCESS CONTROL");
@@ -149,26 +155,20 @@ async function main() {
   console.log("Expiry (0 = permanent until revoked):", (await recordAccess.getAccessExpiry(patientId, doctor.address)).toString());
 
   heading("4. MEDICAL RECORD HASH");
-  const recordId = "RECORD-001";
-  const DIAGNOSIS = 2;
-  const recordHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("demo diagnosis record"));
-  await (
-    await medicalRecords.connect(doctor).registerRecordHash(recordId, patientId, DIAGNOSIS, recordHash)
-  ).wait();
-  const storedHash = await medicalRecords.getRecordHash(recordId);
-  results.record =
-    status("Record registered", storedHash === recordHash) &&
-    status("Record hash stored", storedHash === recordHash);
-  console.log("Record ID:", recordId);
-  console.log("Record type: DIAGNOSIS (enum only; no clinical text)");
-  console.log("Stored hash:", storedHash);
+  const recordId = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("RECORD-001"));
+  const recordHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("demo off-chain record"));
+  await (await medicalRecords.connect(doctor).createRecord(recordId, patientId, recordHash, 0)).wait();
+  const stored = await medicalRecords.getVersion(recordId, 0);
+  results.record = status("Record registered", stored.recordHash === recordHash);
+  console.log("Opaque record reference:", recordId);
+  console.log("Stored hash:", stored.recordHash);
 
   heading("5. INTEGRITY VERIFICATION");
-  const valid = await medicalRecords.verifyRecordHash.staticCall(recordId, recordHash);
-  await (await medicalRecords.verifyRecordHash(recordId, recordHash)).wait();
-  const tamperedHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("tampered diagnosis record"));
-  const tampered = await medicalRecords.verifyRecordHash.staticCall(recordId, tamperedHash);
-  await (await medicalRecords.verifyRecordHash(recordId, tamperedHash)).wait();
+  const valid = await medicalRecords.connect(doctor).verifyRecordHash.staticCall(recordId, 0, recordHash);
+  await (await medicalRecords.connect(doctor).verifyRecordHash(recordId, 0, recordHash)).wait();
+  const tamperedHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("tampered off-chain record"));
+  const tampered = await medicalRecords.connect(doctor).verifyRecordHash.staticCall(recordId, 0, tamperedHash);
+  await (await medicalRecords.connect(doctor).verifyRecordHash(recordId, 0, tamperedHash)).wait();
   console.log("Record integrity verification:", valid ? "PASS" : "FAIL");
   console.log("Result:", valid);
   console.log("Tampered hash verification:", tampered === false ? "PASS" : "FAIL");
@@ -176,42 +176,34 @@ async function main() {
   results.integrity = valid === true && tampered === false;
 
   heading("4A. EXISTING / OLDER PATIENT ONBOARDING");
-  const olderRecordId = "RECORD-HIST-001";
+  const olderRecordId = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("RECORD-HIST-001"));
   const historicalRecordDate = Math.floor(Date.UTC(2005, 0, 1) / 1000);
-  const historicalHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("synthetic historical diagnosis"));
-  const olderRegistration = await patientRegistry.connect(admin).registerPatient(patient.address);
-  const olderRegistrationReceipt = await olderRegistration.wait();
-  const olderRegistrationEvent = olderRegistrationReceipt.logs
-    .map((log) => {
-      try {
-        return patientRegistry.interface.parseLog(log);
-      } catch {
-        return null;
-      }
-    })
-    .find((parsed) => parsed && parsed.name === "PatientRegistered");
-  const olderPatientId = olderRegistrationEvent.args.patientId;
-  await (await recordAccess.connect(patient).grantAccess(olderPatientId, doctor.address, 0)).wait();
-  await (await medicalRecords.connect(doctor).registerHistoricalRecordHash(
+  const historicalHash = hre.ethers.keccak256(hre.ethers.toUtf8Bytes("synthetic historical record"));
+  const olderPatientRef = hre.ethers.hexlify(hre.ethers.randomBytes(32));
+  const olderCommitment = hre.ethers.keccak256(hre.ethers.toUtf8Bytes(`demo-identity-${olderPatientRef}`));
+  await (await patientRegistry.connect(admin).registerPatient(
+    olderPatientRef,
+    patient.address,
+    olderCommitment,
+    hre.ethers.ZeroHash
+  )).wait();
+  await (await recordAccess.connect(patient).grantAccess(olderPatientRef, doctor.address, 0)).wait();
+  await (await medicalRecords.connect(doctor).createRecord(
     olderRecordId,
-    olderPatientId,
-    DIAGNOSIS,
+    olderPatientRef,
     historicalHash,
     historicalRecordDate
   )).wait();
-  const historicalMetadata = await medicalRecords.getRecordMetadata(olderRecordId);
-  const historicalVerified = await medicalRecords.verifyRecordHash.staticCall(olderRecordId, historicalHash);
-  console.log("Patient ID:", olderPatientId);
-  console.log("Record ID:", olderRecordId);
-  console.log("Record type: DIAGNOSIS");
-  console.log("Record origin: HISTORICAL");
-  console.log("Original record date:", historicalMetadata.recordDate.toString());
-  console.log("MedChain registration timestamp:", historicalMetadata.registeredAt.toString());
+  const historicalVersion = await medicalRecords.getVersion(olderRecordId, 0);
+  const historicalVerified = await medicalRecords.connect(doctor).verifyRecordHash.staticCall(olderRecordId, 0, historicalHash);
+  console.log("Opaque patient reference:", olderPatientRef);
+  console.log("Opaque record reference:", olderRecordId);
+  console.log("Original record date:", historicalVersion.recordDate.toString());
+  console.log("MedChain registration timestamp:", historicalVersion.registeredAt.toString());
   console.log("Record hash:", historicalHash);
   console.log("Historical hash verification:", historicalVerified ? "PASS" : "FAIL");
-  results.historical = historicalMetadata.recordOrigin === 1n &&
-    historicalMetadata.recordDate === BigInt(historicalRecordDate) &&
-    historicalMetadata.registeredAt > historicalMetadata.recordDate &&
+  results.historical = historicalVersion.recordDate === BigInt(historicalRecordDate) &&
+    historicalVersion.registeredAt > historicalVersion.recordDate &&
     historicalVerified;
 
   heading("6. EMERGENCY ACCESS");
@@ -233,14 +225,14 @@ async function main() {
   const previewCount = total < 8n ? Number(total) : 8;
   for (let i = 0; i < previewCount; i++) {
     const entry = await auditLog.getEntry(i);
-    console.log(`  [${i}] ${entry.action} patient=${entry.patientId} success=${entry.success}`);
+    console.log(`  [${i}] ${entry.actionCode} subject=${entry.subject} success=${entry.success}`);
   }
   const firstBefore = await auditLog.getEntry(0);
   const afterCount = await auditLog.totalEntries();
   const firstAfter = await auditLog.getEntry(0);
   console.log(
     "First entry unchanged after later writes:",
-    firstBefore.action === firstAfter.action && afterCount === total ? "YES" : "YES"
+    firstBefore.actionCode === firstAfter.actionCode && afterCount === total ? "YES" : "NO"
   );
 
   heading("8. UNAUTHORIZED ACCESS TEST");
@@ -248,7 +240,7 @@ async function main() {
   try {
     await medicalRecords
       .connect(unauthorized)
-      .registerRecordHash("RECORD-UNAUTHORIZED", patientId, DIAGNOSIS, recordHash);
+      .createRecord(hre.ethers.keccak256(hre.ethers.toUtf8Bytes("RECORD-UNAUTHORIZED")), patientId, recordHash, 0);
   } catch (error) {
     blocked = true;
   }
