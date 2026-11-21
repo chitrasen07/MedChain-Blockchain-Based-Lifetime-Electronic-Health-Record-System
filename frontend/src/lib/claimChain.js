@@ -55,6 +55,13 @@ function selector(signature) {
   return `0x${bytesToHex(hash).slice(0, 8)}`;
 }
 
+export function transferCalldata(kind, patientRef, newController = "") {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(patientRef || "")) return "";
+  if (kind === "accept") return `${selector("acceptControllerTransfer(bytes32)")}${patientRef.slice(2)}`;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(newController || "")) return "";
+  return `${selector("proposeControllerTransfer(bytes32,address)")}${patientRef.slice(2)}${newController.slice(2).toLowerCase().padStart(64, "0")}`;
+}
+
 export function claimCalldata(kind, patientRef, value) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(patientRef || "") || !/^0x[0-9a-fA-F]{64}$/.test(value || "")) return "";
   const signature = kind === "reveal"
@@ -85,7 +92,9 @@ export async function sendPatientClaim({ kind, patientRef, value, registryAddres
   if (!registry) {
     throw Object.assign(new Error("The patient registry for this network is not configured."), { code: "claim_blocked" });
   }
-  const data = claimCalldata(kind, patientRef, value);
+  const data = kind === "propose" || kind === "accept"
+    ? transferCalldata(kind, patientRef, value)
+    : claimCalldata(kind, patientRef, value);
   if (!data || !ethereum?.request) {
     throw Object.assign(new Error("The claim transaction could not be prepared."), { code: "claim_blocked" });
   }

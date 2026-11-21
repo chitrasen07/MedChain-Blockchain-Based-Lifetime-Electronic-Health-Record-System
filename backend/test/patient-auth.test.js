@@ -163,7 +163,7 @@ test("another wallet, a missing patient, and a chain outage are rejected without
     walletAddress: stranger.address
   });
   assert.equal(wrong.status, 401);
-  assert.equal(wrong.body.error, "Patient sign-in could not be verified.");
+  assert.equal(wrong.body.error, "This wallet does not control this lifetime ID.");
   assert.equal(owned.calls.includes("challenge"), false);
 
   const missing = harness();

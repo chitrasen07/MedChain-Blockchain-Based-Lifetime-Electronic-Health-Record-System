@@ -551,6 +551,32 @@ function createDb(config) {
       );
       return result.rows;
     },
+    async findStaffRoleByWallet(walletAddress) {
+      const result = await query(
+        "SELECT u.role FROM staff_chain_authorizations a JOIN users u ON u.id = a.user_id WHERE lower(a.wallet_address) = lower($1) LIMIT 1",
+        [walletAddress]
+      );
+      return result.rows[0]?.role || "";
+    },
+    async createDemographicCorrection({ publicPatientId, hospitalId, contentCiphertext, actorId }) {
+      const result = await query(
+        "INSERT INTO patient_demographic_corrections (patient_id, hospital_id, content_ciphertext, created_by) SELECT id, $2, $3, $4 FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed' RETURNING id, created_at AS \"createdAt\"",
+        [publicPatientId, hospitalId, contentCiphertext, actorId]
+      );
+      if (!result.rowCount) {
+        const error = new Error("Patient not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      return result.rows[0];
+    },
+    async listDemographicCorrections(publicPatientId, hospitalId) {
+      const result = await query(
+        "SELECT c.content_ciphertext AS \"contentCiphertext\", c.created_at AS \"createdAt\", u.full_name AS \"authorName\" FROM patient_demographic_corrections c JOIN patients p ON p.id = c.patient_id LEFT JOIN users u ON u.id = c.created_by WHERE p.patient_id=$1 AND c.hospital_id=$2 ORDER BY c.created_at ASC",
+        [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
     async createClinicalAudit(input) {
       await query(
         "INSERT INTO clinical_audit_events (hospital_id, patient_id, actor_id, actor_role, action, category, version_index, tx_hash) SELECT $1, id, $3, $4, $5, $6, $7, $8 FROM patients WHERE patient_id=$2 AND hospital_id=$1 AND status='confirmed'",

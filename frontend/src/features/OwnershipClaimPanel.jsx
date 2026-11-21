@@ -234,7 +234,7 @@ export function OwnershipClaimPanel({ patientId, walletAddress }) {
         <li>Check the recovery code. It stays in this browser and is not sent to the hospital.</li>
         <li>Announce the ownership claim on Sepolia.</li>
         <li>Wait for the contract period. The current Sepolia contract uses one hour, and the countdown below follows that contract.</li>
-        <li>Reveal the claim, then sign in with this wallet.</li>
+        <li>Reveal the claim, then sign in with this same lifetime Patient ID and wallet. Do not register a second ID.</li>
       </ol>
       <div className="mt-4 space-y-4">
         <Input

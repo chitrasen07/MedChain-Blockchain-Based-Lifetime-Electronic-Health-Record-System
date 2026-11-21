@@ -4,10 +4,11 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const crypto = require("node:crypto");
 const { z } = require("zod");
-const { encryptJson, decryptJson, fieldHash } = require("./crypto");
+const { encryptJson, decryptJson, fieldHash, requiredKey } = require("./crypto");
 const { issueToken, requireAuth } = require("./auth");
-const { registerPatientAuth } = require("./patientAuth");
-const { registerClinicalRecords } = require("./clinicalRecords");
+const { registerPatientAuth, patientOwnerBlocked, STAFF_OWNER } = require("./patientAuth");
+const { registerClinicalRecords, openClinicalAccess, noteClinicalAudit } = require("./clinicalRecords");
+const { CONSENT_REQUIRED } = require("./consentChain");
 const { registerNursing } = require("./nursing");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
@@ -202,6 +203,9 @@ function createApp({ db, blockchain, config }) {
     try {
       const walletAddress = getAddress(z.string().trim().regex(/^0x[0-9a-fA-F]{40}$/).parse(req.body?.walletAddress));
       if (walletAddress === ZERO_ADDRESS) return res.status(400).json({ error: "A patient wallet is required." });
+      if (await patientOwnerBlocked(db, blockchain, walletAddress)) {
+        return res.status(409).json({ error: STAFF_OWNER });
+      }
       const nonce = `0x${crypto.randomBytes(32).toString("hex")}`;
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       const message = ["MedChain Patient Wallet Link", `Wallet: ${walletAddress}`, `Nonce: ${nonce}`, `Expires: ${expiresAt}`].join("\n");
@@ -244,6 +248,9 @@ function createApp({ db, blockchain, config }) {
         return res.status(503).json({ error: "Blockchain registration is unavailable" });
       }
       const requestedOwnership = readPatientOwnership(req.body);
+      if (requestedOwnership.controller !== ZERO_ADDRESS && await patientOwnerBlocked(db, blockchain, requestedOwnership.controller)) {
+        return res.status(409).json({ error: STAFF_OWNER });
+      }
       const commitment = blockchain.identityCommitment(JSON.stringify(hashes), config.identityCommitmentKey);
       if (typeof blockchain.verifySigner === "function") {
         try {
@@ -300,6 +307,9 @@ function createApp({ db, blockchain, config }) {
           }
           return res.status(202).json({ status: "registration_reconciliation_required" });
         }
+        if (ownership.controller !== ZERO_ADDRESS && await patientOwnerBlocked(db, blockchain, ownership.controller)) {
+          return res.status(409).json({ error: STAFF_OWNER });
+        }
         if (ownership.controller !== ZERO_ADDRESS && typeof db.consumeRegistrationWalletChallenge === "function") {
           const nonce = typeof req.body?.walletProof?.nonce === "string" ? req.body.walletProof.nonce.trim().toLowerCase() : "";
           const signature = typeof req.body?.walletProof?.signature === "string" ? req.body.walletProof.signature.trim() : "";
@@ -342,6 +352,53 @@ function createApp({ db, blockchain, config }) {
       };
       const patient = await db.confirmPatient(pending.id, chain, req.user.sub, req.user.hospital_id);
       res.status(201).json({ patientId: patient.patientId, did: patient.did, transaction: patient.txHash });
+    } catch (error) { next(error); }
+  });
+
+  const demographicEditor = requireAuth(
+    config.jwtSecret,
+    ["administrator", "hospital_staff", "doctor"],
+    { loadUser: db.getUserForAuth }
+  );
+  app.post("/patients/:patientId/demographic-corrections", demographicEditor, async (req, res, next) => {
+    try {
+      const input = z.object({
+        reason: z.string().trim().min(3).max(500),
+        fullName: z.string().trim().min(2).max(200).optional(),
+        dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        gender: z.string().trim().max(40).optional(),
+        bloodGroup: z.string().trim().max(16).optional(),
+        mobile: z.string().trim().max(40).optional(),
+        email: z.string().email().max(320).optional(),
+        emergencyContact: z.string().trim().max(200).optional()
+      }).parse(req.body);
+      const fields = {};
+      for (const key of ["fullName", "dateOfBirth", "gender", "bloodGroup", "mobile", "email", "emergencyContact"]) {
+        if (input[key]) fields[key] = input[key];
+      }
+      if (!Object.keys(fields).length) return res.status(400).json({ error: "Invalid request" });
+      const patient = await db.getPatientChartSource(req.params.patientId, req.user.hospital_id);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      if (req.user.role === "doctor") {
+        const mode = await openClinicalAccess({ db, blockchain, userId: req.user.sub, patient });
+        if (mode !== "consent") return res.status(403).json({ error: CONSENT_REQUIRED });
+      }
+      if (typeof db.createDemographicCorrection !== "function") return res.status(503).json({ error: "Service unavailable" });
+      const key = requiredKey(config.piiEncryptionKey, "PII_ENCRYPTION_KEY", 32);
+      await db.createDemographicCorrection({
+        publicPatientId: patient.patientId,
+        hospitalId: req.user.hospital_id,
+        contentCiphertext: encryptJson({ ...fields, reason: input.reason }, key),
+        actorId: req.user.sub
+      });
+      await noteClinicalAudit(db, {
+        hospitalId: req.user.hospital_id,
+        publicPatientId: patient.patientId,
+        actorId: req.user.sub,
+        actorRole: req.user.role,
+        action: "demographic_corrected"
+      });
+      res.status(201).json({ patientId: patient.patientId, fields, reason: input.reason });
     } catch (error) { next(error); }
   });
 

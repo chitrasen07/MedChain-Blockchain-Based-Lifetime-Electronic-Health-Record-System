@@ -2,9 +2,9 @@ const crypto = require("node:crypto");
 const { getAddress, verifyMessage } = require("ethers");
 const { z } = require("zod");
 const { decryptJson, requiredKey } = require("./crypto");
-const { issuePatientToken, requirePatient } = require("./auth");
+const { issuePatientToken, requireAuth, requirePatient } = require("./auth");
 const { presentClinicalRecord, assembleChart, sendSummaryPdf } = require("./clinicalRecords");
-const { emergencyCard } = require("./chart");
+const { emergencyCard, mergeProfile } = require("./chart");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const CLAIM_DELAY_SECONDS = 60 * 60;
@@ -15,10 +15,39 @@ const patientIdSchema = z.string().trim().regex(/^PATIENT-[0-9]{1,12}$/);
 const walletSchema = z.string().trim().regex(/^0x[0-9a-fA-F]{40}$/);
 const bytes32Schema = z.string().trim().regex(/^0x[0-9a-fA-F]{64}$/);
 
-function signInRejected() {
-  const error = new Error("Patient sign-in could not be verified.");
+const UNCLAIMED_SIGNIN = "This record is registered and the wallet is not linked yet. Complete the ownership claim below before signing in.";
+const WRONG_WALLET = "This wallet does not control this lifetime ID.";
+const STAFF_CONTROLLER = "This lifetime ID is controlled by a hospital staff wallet. Patient sign-in is blocked until that controller proposes a transfer in MetaMask and the patient's wallet accepts it.";
+const STAFF_OWNER = "A hospital staff wallet cannot become the patient owner. Connect the patient's own wallet, or register now and link the wallet later.";
+
+function signInRejected(message = "Patient sign-in could not be verified.") {
+  const error = new Error(message);
   error.statusCode = 401;
   return error;
+}
+
+async function controllerRole(db, blockchain, wallet) {
+  if (!wallet || wallet === ZERO_ADDRESS) return "";
+  if (typeof db.findStaffRoleByWallet === "function") {
+    const role = await db.findStaffRoleByWallet(wallet);
+    if (role) return role;
+  }
+  if (typeof blockchain?.hospitalSigner === "function") {
+    try {
+      const signer = getAddress(await blockchain.hospitalSigner()).toLowerCase();
+      if (signer === wallet) return "hospital_signer";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+async function ownershipFacts(db, blockchain, record, walletAddress) {
+  const controller = await readController(blockchain, record.did);
+  const staffControlled = Boolean(await controllerRole(db, blockchain, controller));
+  const walletIsController = controller !== ZERO_ADDRESS && controller === walletAddress.toLowerCase();
+  return { controller, staffControlled, walletIsController };
 }
 
 function ownershipRejected() {
@@ -106,8 +135,10 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const walletAddress = getAddress(input.walletAddress);
       const record = await db.findConfirmedPatientForAuth(input.patientId);
       if (!record?.did) throw signInRejected();
-      const controller = await readController(blockchain, record.did);
-      if (controller === ZERO_ADDRESS || controller !== walletAddress.toLowerCase()) throw signInRejected();
+      const facts = await ownershipFacts(db, blockchain, record, walletAddress);
+      if (facts.staffControlled) throw signInRejected(STAFF_CONTROLLER);
+      if (facts.controller === ZERO_ADDRESS) throw signInRejected(UNCLAIMED_SIGNIN);
+      if (!facts.walletIsController) throw signInRejected(WRONG_WALLET);
       const nonce = `0x${crypto.randomBytes(32).toString("hex")}`;
       const expiresAt = new Date(Date.now() + CHALLENGE_MS).toISOString();
       const message = patientLoginMessage({ patientId: record.patientId, walletAddress, nonce, expiresAt });
@@ -140,10 +171,54 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       if (signer !== challenge.walletAddress) throw signInRejected();
       const record = await db.getPatientForAuth(challenge.patientId);
       if (!record?.did || record.patientId !== challenge.publicPatientId) throw signInRejected();
-      const controller = await readController(blockchain, record.did);
-      if (controller !== signer) throw signInRejected();
+      const facts = await ownershipFacts(db, blockchain, record, signer);
+      if (facts.staffControlled) throw signInRejected(STAFF_CONTROLLER);
+      if (!facts.walletIsController) throw signInRejected(WRONG_WALLET);
       res.json({
         token: issuePatientToken(record, getAddress(signer), config.jwtSecret)
+      });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/patient-auth/ownership-status", authRateLimit, async (req, res, next) => {
+    try {
+      rejectRecoveryMaterial(req.body);
+      const input = z.object({ patientId: patientIdSchema, walletAddress: walletSchema }).parse(req.body);
+      const walletAddress = getAddress(input.walletAddress);
+      const record = await db.findConfirmedPatientForAuth(input.patientId);
+      if (!record?.did) throw signInRejected();
+      const facts = await ownershipFacts(db, blockchain, record, walletAddress);
+      res.json({
+        patientId: record.patientId,
+        patientRef: record.did,
+        ownership: facts.controller === ZERO_ADDRESS ? "unclaimed" : "linked",
+        label: facts.controller === ZERO_ADDRESS ? "Registered — Wallet linking pending" : "Registered — Wallet linked",
+        staffControlled: facts.staffControlled,
+        walletIsController: facts.walletIsController,
+        message: facts.staffControlled
+          ? STAFF_CONTROLLER
+          : facts.controller === ZERO_ADDRESS
+            ? UNCLAIMED_SIGNIN
+            : facts.walletIsController
+              ? "Patient ownership verified."
+              : WRONG_WALLET
+      });
+    } catch (error) { next(error); }
+  });
+
+  app.get("/patients/:patientId/ownership", requireAuth(config.jwtSecret, ["receptionist", "hospital_staff", "doctor", "reviewer", "administrator"], { loadUser: db.getUserForAuth }), async (req, res, next) => {
+    try {
+      const patient = await db.getPatient(req.params.patientId, req.user.hospital_id);
+      if (!patient?.did) return res.status(404).json({ error: "Patient not found" });
+      const bound = typeof db.getClinicalWallet === "function" ? await db.getClinicalWallet(req.user.sub) : "";
+      const facts = await ownershipFacts(db, blockchain, { did: patient.did }, bound || ZERO_ADDRESS);
+      res.json({
+        patientId: patient.patientId,
+        patientRef: patient.did,
+        ownership: facts.controller === ZERO_ADDRESS ? "unclaimed" : "linked",
+        label: facts.controller === ZERO_ADDRESS ? "Registered — Wallet linking pending" : "Registered — Wallet linked",
+        staffControlled: facts.staffControlled,
+        callerIsController: Boolean(bound) && facts.walletIsController
       });
     } catch (error) { next(error); }
   });
@@ -219,7 +294,18 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
           throw chainUnavailable();
         }
       }
-      res.json({ patientId: req.patient.patientId, profile });
+      let correctionRows = [];
+      if (typeof db.listDemographicCorrections === "function") {
+        try {
+          correctionRows = await db.listDemographicCorrections(req.patient.patientId, req.patient.hospital_id);
+        } catch (error) {
+          if (error?.code !== "42P01") throw error;
+        }
+      }
+      const corrections = correctionRows.map((row) => {
+        try { return { ...decryptJson(row.contentCiphertext, key), createdAt: row.createdAt, authorName: row.authorName || null }; } catch { return {}; }
+      });
+      res.json({ patientId: req.patient.patientId, profile: mergeProfile(profile, [], corrections) });
     } catch (error) { next(error); }
   });
 
@@ -368,4 +454,13 @@ function reasonForPatient(rows, reasonHash, key) {
   }
 }
 
-module.exports = { registerPatientAuth, patientLoginMessage, CLAIM_DELAY_SECONDS };
+module.exports = {
+  registerPatientAuth,
+  patientLoginMessage,
+  CLAIM_DELAY_SECONDS,
+  patientOwnerBlocked: (db, blockchain, wallet) => controllerRole(db, blockchain, getAddress(wallet).toLowerCase()).then(Boolean),
+  STAFF_OWNER,
+  STAFF_CONTROLLER,
+  UNCLAIMED_SIGNIN,
+  WRONG_WALLET
+};

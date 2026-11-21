@@ -4,6 +4,9 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { PageHeader } from "../components/PageHeader";
+import { StatusBadge } from "../components/StatusBadge";
+import { DemographicCorrectionForm } from "./DemographicCorrectionForm";
+import { OwnershipTransferPanel } from "./OwnershipTransferPanel";
 import { PatientChart } from "./PatientChart";
 import { ApiError, apiClient, messageForRequest } from "../lib/api";
 import { pageChrome } from "../lib/pageChrome";
@@ -29,6 +32,7 @@ export function PatientLookupScreen({ pageKey, chart = false, intake = false }) 
   const [patient, setPatient] = useState(null);
   const [record, setRecord] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [ownership, setOwnership] = useState(null);
   const [walletAddress, setWalletAddress] = useState("");
 
   useEffect(() => {
@@ -112,6 +116,11 @@ export function PatientLookupScreen({ pageKey, chart = false, intake = false }) 
     setLoading(true);
     try {
       setPatient(await patientService.get(id));
+      try {
+        setOwnership(await apiClient.request(`/patients/${encodeURIComponent(id)}/ownership`));
+      } catch {
+        setOwnership(null);
+      }
       await loadChart(id);
     } catch (requestError) {
       setPatient(null);
@@ -163,16 +172,27 @@ export function PatientLookupScreen({ pageKey, chart = false, intake = false }) 
           </dl>
         </Card>
       ) : null}
-      {summary ? <StaffSummary summary={summary} /> : null}
+      {ownership ? (
+        <Card className="mt-4" title="Wallet ownership" description="Ownership is read from the deployed PatientRegistry. The hospital cannot change it from the server.">
+          <StatusBadge tone={ownership.staffControlled ? "warning" : ownership.ownership === "linked" ? "success" : "warning"}>{ownership.label}</StatusBadge>
+          {ownership.staffControlled && ownership.callerIsController ? (
+            <OwnershipTransferPanel mode="propose" patientRef={ownership.patientRef} walletAddress={walletAddress} />
+          ) : null}
+          {ownership.staffControlled && !ownership.callerIsController ? (
+            <p className="mt-3 text-sm leading-6 text-ink">This record is controlled by a hospital staff wallet. Connect that wallet to propose a transfer to the patient. Do not create another Patient ID.</p>
+          ) : null}
+        </Card>
+      ) : null}
+      {summary ? <StaffSummary summary={summary} patientId={patient.patientId} /> : null}
       {record ? <PatientChart chart={record} patientId={patient.patientId} onReload={() => loadChart(patient.patientId)} /> : null}
     </div>
   );
 }
 
-function StaffSummary({ summary }) {
+function StaffSummary({ summary, patientId }) {
   const demographics = summary.demographics || {};
   return (
-    <Card className="mt-4" title="Permitted details" description="Name and date of birth come from the hospital registration. Visit notes, vitals, and laboratory intake are the nursing submissions for this hospital. Doctor diagnoses are not included.">
+    <Card className="mt-4" title="Permitted details" description="Name and date of birth show the latest authorized correction over the original registration. Visit notes, vitals, and laboratory intake are the nursing submissions for this hospital. Doctor diagnoses are not included.">
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <div><dt className="text-muted">Name</dt><dd className="mt-1 text-ink">{demographics.fullName || "Not recorded"}</dd></div>
         <div><dt className="text-muted">Date of birth</dt><dd className="mt-1 text-ink">{demographics.dateOfBirth || "Not recorded"}</dd></div>
@@ -182,6 +202,7 @@ function StaffSummary({ summary }) {
       <IntakeList title="Visit notes" items={summary.visits} />
       <IntakeList title="Vital signs" items={summary.vitals} />
       <IntakeList title="Laboratory reports" items={summary.labs} />
+      <DemographicCorrectionForm patientId={patientId} />
     </Card>
   );
 }

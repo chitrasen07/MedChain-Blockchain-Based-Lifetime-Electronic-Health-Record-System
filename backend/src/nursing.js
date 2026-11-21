@@ -4,6 +4,7 @@ const { decryptJson, encryptJson, requiredKey } = require("./crypto");
 const { requireAuth } = require("./auth");
 const { CONSENT_REQUIRED, EMERGENCY_LIMIT } = require("./consentChain");
 const { noteClinicalAudit, openClinicalAccess, recordContentHash } = require("./clinicalRecords");
+const { mergeProfile } = require("./chart");
 
 const NURSE_ONLY = "Hospital staff record vitals, visit notes, and laboratory intake. A doctor reviews them before they become a clinical record.";
 const DOCTOR_REVIEW = "Only a doctor can review nursing intake.";
@@ -253,6 +254,18 @@ function registerNursing(app, { db, blockchain, config }) {
       if (patient.piiCiphertext) {
         try { profile = decryptJson(patient.piiCiphertext, key()); } catch { profile = {}; }
       }
+      let correctionRows = [];
+      if (typeof db.listDemographicCorrections === "function") {
+        try {
+          correctionRows = await db.listDemographicCorrections(patient.patientId, req.user.hospital_id);
+        } catch (error) {
+          if (error?.code !== "42P01") throw error;
+        }
+      }
+      const corrections = correctionRows.map((row) => {
+        try { return decryptJson(row.contentCiphertext, key()); } catch { return {}; }
+      });
+      profile = mergeProfile(profile, [], corrections);
       const rows = await db.listNursingIntake(patient.patientId, req.user.hospital_id);
       const items = rows.map((row) => presentIntake(row, key(), { includeContent: true }));
       await noteClinicalAudit(db, {

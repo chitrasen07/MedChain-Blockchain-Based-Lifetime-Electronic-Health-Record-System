@@ -148,7 +148,7 @@ export const pages = {
     eyebrow: "Hospital Admin",
     title: "Patient Registration",
     description:
-      "Check for a confirmed match, then register with the patient's Sepolia wallet. That is the recommended path and allows immediate sign-in. Registration without a wallet remains available and requires a later ownership claim.",
+      "Check for a confirmed match, then register now and link the patient's wallet later. That is the default. Linking the patient's own MetaMask during registration is also available. A hospital wallet cannot become the patient owner.",
     kind: "table",
     columns: [
       { key: "patientId", header: "Patient ID" },
@@ -348,7 +348,7 @@ export const pages = {
     eyebrow: "Hospital Staff",
     title: "Register Patient",
     description:
-      "Check for a confirmed match, then register with the patient's Sepolia wallet. The patient signs the wallet link. Staff cannot sign on the patient's behalf. Registration without a wallet remains available.",
+      "Check for a confirmed match. The default is to register now and link the patient's own wallet later. Linking the patient's MetaMask during registration is also available. Staff cannot sign for the patient.",
     kind: "table",
     columns: [],
     emptyTitle: "No registration in progress",

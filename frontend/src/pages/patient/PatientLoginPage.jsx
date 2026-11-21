@@ -4,7 +4,8 @@ import { BrandLockup } from "../../components/BrandMark";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { useAuth } from "../../context/useAuth";
-import { ApiError } from "../../lib/api";
+import { OwnershipTransferPanel } from "../../features/OwnershipTransferPanel";
+import { ApiError, apiClient } from "../../lib/api";
 import { connectPatientWallet, signPatientLogin } from "../../lib/patientWallet";
 import { OwnershipClaimPanel } from "../../features/OwnershipClaimPanel";
 import { homeForRole } from "../../lib/roles";
@@ -18,6 +19,7 @@ export function PatientLoginPage() {
   const [patientId, setPatientId] = useState("");
   const [walletAddress, setWalletAddress] = useState("");
   const [notice, setNotice] = useState("");
+  const [ownership, setOwnership] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
   const [clock, setClock] = useState(() => Date.now());
@@ -45,6 +47,31 @@ export function PatientLoginPage() {
       setWalletAddress(await connectPatientWallet());
     } catch (error) {
       setNotice(patientAuthMessage(error));
+    }
+  }
+
+  async function checkOwnership() {
+    setNotice("");
+    setOwnership(null);
+    const id = patientId.trim().toUpperCase();
+    if (!patientIdPattern.test(id)) {
+      setNotice("Enter a lifetime patient ID such as PATIENT-000001.");
+      return;
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(walletAddress)) {
+      setNotice("Connect the wallet that should control this record.");
+      return;
+    }
+    try {
+      const result = await apiClient.request("/patient-auth/ownership-status", {
+        method: "POST",
+        body: { patientId: id, walletAddress },
+        authenticated: false,
+      });
+      setOwnership(result);
+      setNotice(result?.message || "");
+    } catch (error) {
+      setNotice(patientAuthMessage(error instanceof ApiError ? error : error));
     }
   }
 
@@ -143,6 +170,12 @@ export function PatientLoginPage() {
                   <p role="alert" className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">
                     {notice}
                   </p>
+                ) : null}
+                <Button type="button" variant="secondary" className="w-full" onClick={checkOwnership} disabled={submitting || remaining > 0}>
+                  Check wallet status
+                </Button>
+                {ownership?.staffControlled && !ownership.walletIsController ? (
+                  <OwnershipTransferPanel mode="accept" patientRef={ownership.patientRef} walletAddress={walletAddress} />
                 ) : null}
                 <Button type="submit" className="w-full" loading={submitting} disabled={submitting || remaining > 0}>
                   Sign in

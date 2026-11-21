@@ -22,6 +22,7 @@ const AUDIT_LABELS = {
   intake_viewed: "Nursing intake viewed",
   intake_reviewed: "Nursing intake reviewed",
   intake_rejected: "Nursing intake rejected",
+  demographic_corrected: "Demographics corrected",
   ACCESS_GRANTED: "Consent granted",
   ACCESS_REVOKED: "Consent revoked",
   ACCESS_EXPIRED: "Consent expired",
@@ -119,12 +120,20 @@ function primaryText(record) {
   return fields.map((key) => text(content[key])).filter(Boolean).join(" · ") || MISSING;
 }
 
-function mergeProfile(profile, notes) {
+const DEMOGRAPHIC_FIELDS = ["fullName", "dateOfBirth", "gender", "bloodGroup", "mobile", "email", "emergencyContact"];
+
+function mergeProfile(profile, notes, corrections = []) {
   const next = { ...(profile || {}) };
-  const ordered = [...(notes || [])].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
-  for (const note of ordered) {
+  const orderedNotes = [...(notes || [])].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+  for (const note of orderedNotes) {
     if (text(note.gender)) next.gender = text(note.gender);
     if (text(note.bloodGroup)) next.bloodGroup = text(note.bloodGroup);
+  }
+  const ordered = [...corrections].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+  for (const correction of ordered) {
+    for (const key of DEMOGRAPHIC_FIELDS) {
+      if (text(correction[key])) next[key] = text(correction[key]);
+    }
   }
   return next;
 }
@@ -281,12 +290,14 @@ function buildPatientChart({
   doctors,
   audit,
   today,
-  access
+  access,
+  demographicCorrections
 }) {
   const visible = visibleRecords(records || [], access);
+  const merged = mergeProfile(profile, profileNotes, demographicCorrections);
   const demographics = access === "emergency"
-    ? { fullName: profile?.fullName, dateOfBirth: profile?.dateOfBirth, gender: profile?.gender, bloodGroup: profile?.bloodGroup }
-    : mergeProfile(profile, profileNotes);
+    ? { fullName: merged.fullName, dateOfBirth: merged.dateOfBirth, gender: merged.gender, bloodGroup: merged.bloodGroup }
+    : merged;
   const current = latestByRef(visible);
   const allergies = allergyList(visible);
   const diagnoses = current.filter((record) => record.category === "diagnosis").sort(byDate);
@@ -442,6 +453,11 @@ function buildPatientChart({
       ...verification(record)
     })),
     versions,
+    demographicCorrections: access === "emergency" ? [] : (demographicCorrections || []).map((item) => ({
+      createdAt: item.createdAt || null,
+      author: item.authorName || MISSING,
+      reason: text(item.reason) || MISSING
+    })),
     audit: access === "emergency" ? auditView(audit).filter((item) => item.action === "Emergency access used" || item.action === "Emergency access prepared") : auditView(audit)
   };
 }

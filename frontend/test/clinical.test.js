@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
-import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim } from "../src/lib/claimChain.js";
+import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim, transferCalldata } from "../src/lib/claimChain.js";
 import { SEPOLIA_MEDICAL_RECORDS, SEPOLIA_RECORD_ACCESS, anchorCalldata, emergencyRequestCalldata, grantCalldata, reasonHash, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../src/lib/consentChain.js";
 import { assignRoleCalldata, revokeRoleCalldata, sendRoleAssignment } from "../src/lib/roleChain.js";
 import { clinicalRequestBody } from "../src/services/clinicalService.js";
@@ -34,6 +34,14 @@ describe("clinical records and claims", () => {
     ]);
     assert.equal(claimCalldata("announce", patientRef, value), iface.encodeFunctionData("announceControllerClaim", [patientRef, value]));
     assert.equal(claimCalldata("reveal", patientRef, value), iface.encodeFunctionData("revealControllerClaim", [patientRef, value]));
+    const transfer = new Interface([
+      "function proposeControllerTransfer(bytes32 patientRef, address newController)",
+      "function acceptControllerTransfer(bytes32 patientRef)",
+    ]);
+    const nextWallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+    assert.equal(transferCalldata("propose", patientRef, nextWallet), transfer.encodeFunctionData("proposeControllerTransfer", [patientRef, nextWallet]));
+    assert.equal(transferCalldata("accept", patientRef), transfer.encodeFunctionData("acceptControllerTransfer", [patientRef]));
+    assert.equal(transferCalldata("propose", patientRef, "not-a-wallet"), "");
     assert.equal(claimBroadcastAllowed(11155111), true);
     assert.equal(claimBroadcastAllowed(31337), true);
     assert.equal(claimBroadcastAllowed(1), false);

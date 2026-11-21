@@ -8,6 +8,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, apiClient, messageForRequest } from "../lib/api";
 import { anchorLabel, anchorTone, emergencyCardUrl, exactAllergyAlert, filterTimeline, listText } from "../lib/chartView";
 import { clinicalService } from "../services/clinicalService";
+import { DemographicCorrectionForm } from "./DemographicCorrectionForm";
 
 const TABS = ["Overview", "Medical History", "Vitals", "Prescriptions", "Lab Reports", "Visits", "Consent", "Blockchain", "Audit"];
 
@@ -159,6 +160,15 @@ export function PatientChart({ chart, patientId, readOnly = false, onReload }) {
       </div>
       {notice ? <p role="alert" className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">{notice}</p> : null}
       {tab === "Overview" ? (
+        <div className="space-y-4">
+          {!readOnly ? <Card title="Demographic correction" description="Authorized corrections are versioned and encrypted. The lifetime Patient ID stays the same."><DemographicCorrectionForm patientId={patientId} /></Card> : null}
+          {chart.demographicCorrections?.length ? (
+            <Card title="Correction history" description="The reason is stored with the version. The original registration is not overwritten.">
+              {chart.demographicCorrections.map((item, index) => (
+                <p key={`${item.createdAt}-${index}`} className="mb-2 text-sm text-ink">Corrected version · {item.author} · {item.createdAt ? new Date(item.createdAt).toLocaleString() : "Time unavailable"} · {item.reason}</p>
+              ))}
+            </Card>
+          ) : null}
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
           <Card title="Health summary">
             <dl className="grid gap-4 sm:grid-cols-2">
@@ -195,6 +205,7 @@ export function PatientChart({ chart, patientId, readOnly = false, onReload }) {
               </form>
             </Card>
           )}
+        </div>
         </div>
       ) : null}
       {tab === "Medical History" ? (

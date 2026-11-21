@@ -25,10 +25,10 @@ function registrationTone(phase) {
   return "info";
 }
 
-function registrationLabel(phase) {
+function registrationLabel(phase, mode) {
   if (phase === "submitting") return "Submitting";
   if (phase === "pending") return "Awaiting confirmation";
-  if (phase === "confirmed") return "Confirmed";
+  if (phase === "confirmed") return mode === "wallet" ? "Registered — Wallet linked" : "Registered — Wallet linking pending";
   if (phase === "duplicate") return "Duplicate identity";
   if (phase === "failed") return "Failed";
   if (phase === "uncertain") return "Needs reconciliation";
@@ -66,7 +66,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
   const [match, setMatch] = useState(null);
   const [registration, setRegistration] = useState(null);
   const [phase, setPhase] = useState("");
-  const [ownershipMode, setOwnershipMode] = useState("wallet");
+  const [ownershipMode, setOwnershipMode] = useState("claim");
   const registerLock = useRef(false);
   const [controller, setController] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
@@ -180,8 +180,8 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
         setController("");
         setClaimCommitment("");
         setNotice(ownershipMode === "wallet"
-          ? "Registration is confirmed. The patient can sign in now with the same wallet. No recovery code, announcement, reveal, or waiting period is required."
-          : "Registration is confirmed without a wallet. The patient must complete the later ownership claim before signing in.");
+          ? "Registered — Wallet linked. The patient can sign in now with the same wallet. The hospital wallet was not used as the owner."
+          : "Registered — Wallet linking pending. Give the patient this Patient ID and the recovery code. They connect their own wallet, check the code, announce the claim, wait for the contract period, reveal it, and then sign in. No second Patient ID is created.");
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && messageForRequest(error).includes("identity commitment")) {
@@ -234,28 +234,28 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={ownershipMode === "wallet"}
-                  className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "wallet" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
-                  onClick={() => setOwnershipMode("wallet")}
-                >
-                  <span className="block text-sm font-semibold text-navy">Register with wallet <span className="font-medium text-teal-dark">Recommended</span></span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">Connect the patient's MetaMask on Sepolia and sign the one-time wallet link. Ownership is recorded during registration, so the patient can sign in immediately.</span>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
                   aria-checked={ownershipMode === "claim"}
                   className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "claim" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
                   onClick={() => setOwnershipMode("claim")}
                 >
-                  <span className="block text-sm font-semibold text-navy">Register without a wallet</span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">Optional legacy path. The record is not linked to a wallet during registration.</span>
+                  <span className="block text-sm font-semibold text-navy">Register now, link wallet later <span className="font-medium text-teal-dark">Default</span></span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">Creates the lifetime Patient ID without a wallet. The patient later claims ownership with their own MetaMask and the recovery code. The hospital wallet is not the owner.</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={ownershipMode === "wallet"}
+                  className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "wallet" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
+                  onClick={() => setOwnershipMode("wallet")}
+                >
+                  <span className="block text-sm font-semibold text-navy">Register and link the patient's wallet now</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">The patient connects their own MetaMask on Sepolia and signs the one-time link. Staff wallets cannot be used as the patient owner.</span>
                 </button>
               </div>
               {ownershipMode === "wallet" ? (
                 <div className="mt-4">
                   <p className="break-all text-sm leading-6 text-ink">{controller || "No wallet connected."}</p>
-                  <p className="mt-1 text-xs leading-5 text-muted">The patient signs a message in MetaMask. The hospital never receives the wallet key, and this patient can sign in without the claim wait.</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">Ask the patient to connect their own wallet. Do not use the hospital, doctor, nurse, receptionist, or reviewer wallet. This page does not sign for them.</p>
                   {errors.controller ? <p className="mt-1.5 text-xs leading-5 text-danger">{errors.controller}</p> : null}
                   {errors.walletProof ? <p className="mt-1.5 text-xs leading-5 text-danger">{errors.walletProof}</p> : null}
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -266,7 +266,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 </div>
               ) : (
                 <div className="mt-4">
-                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">This path requires a later ownership claim. The patient must announce the claim, wait one hour, and reveal the recovery code within 24 hours. Missing that window blocks sign-in.</p>
+                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">After registration, the status is Registered — Wallet linking pending. The patient uses this Patient ID on the sign-in page: connect their wallet, check the recovery code, announce, wait for the contract period, reveal, then sign in. Missing the reveal window blocks that claim until it expires.</p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <Button type="button" variant="secondary" onClick={generateRecoveryCode}>Generate recovery code</Button>
                     {recoveryCode ? (
@@ -311,7 +311,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
       ) : null}
       {phase ? (
         <Card className="mt-4" title="Registration status">
-          <StatusBadge tone={registrationTone(phase)}>{registrationLabel(phase)}</StatusBadge>
+          <StatusBadge tone={registrationTone(phase)}>{registrationLabel(phase, ownershipMode)}</StatusBadge>
           <p className="mt-3 text-sm leading-6 text-ink">{phase === "duplicate" || phase === "failed" ? notice : describeRegistration(registration)}</p>
           {registration?.patientId ? <p className="mt-3 text-sm leading-6 text-ink">Lifetime patient ID <span className="font-medium">{registration.patientId}</span></p> : null}
           {registration?.did ? <p className="mt-2 break-all text-sm leading-6 text-muted">Blockchain reference {registration.did}</p> : null}

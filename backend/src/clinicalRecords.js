@@ -697,6 +697,12 @@ async function assembleChart({ db, blockchain, key, patient, access }) {
   const profileNotes = noteRows.map((row) => {
     try { return { ...decryptJson(row.contentCiphertext, key), createdAt: row.createdAt }; } catch { return {}; }
   });
+  const correctionRows = typeof db.listDemographicCorrections === "function"
+    ? await optionalRows(() => db.listDemographicCorrections(patient.patientId, patient.hospital_id || patient.hospitalId))
+    : [];
+  const demographicCorrections = correctionRows.map((row) => {
+    try { return { ...decryptJson(row.contentCiphertext, key), createdAt: row.createdAt, authorName: row.authorName || null }; } catch { return {}; }
+  });
   const visits = typeof db.listPatientVisits === "function" ? await db.listPatientVisits(patient.id) : [];
   const permissions = access === "emergency" ? [] : await safeChain(() => blockchain.listConsent(patient.did));
   const consentHistory = access === "emergency" || typeof blockchain.listConsentHistory !== "function"
@@ -747,7 +753,8 @@ async function assembleChart({ db, blockchain, key, patient, access }) {
     doctors: doctors.map((doctor) => ({ name: doctor.fullName || doctor.name, walletAddress: doctor.walletAddress })),
     audit,
     today: todayUtc(),
-    access
+    access,
+    demographicCorrections
   });
 }
 
