@@ -333,6 +333,13 @@ function createDb(config) {
       const result = await query("SELECT patient_id AS \"patientId\",did,status,created_at AS \"createdAt\" FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed'", [patientId, hospitalId]);
       return result.rows[0] || null;
     },
+    async getPatientChartSource(patientId, hospitalId) {
+      const result = await query(
+        "SELECT id, patient_id AS \"patientId\", did, hospital_id, status, pii_ciphertext AS \"piiCiphertext\", created_at AS \"createdAt\" FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed'",
+        [patientId, hospitalId]
+      );
+      return result.rows[0] || null;
+    },
     async createVisit(patientId, input, actorId, hospitalId) {
       const result = await query("INSERT INTO visits (patient_id,record_reference,record_hash,created_by,hospital_id) SELECT id,$2,$3,$4,$5 FROM patients WHERE patient_id=$1 AND hospital_id=$5 AND status='confirmed' RETURNING id", [patientId, input.recordReference, input.recordHash || null, actorId, hospitalId]);
       if (!result.rowCount) { const error = new Error("Patient not found"); error.statusCode = 404; throw error; }
@@ -461,14 +468,14 @@ function createDb(config) {
     },
     async listMedicalRecordsByPublicId(publicPatientId, hospitalId) {
       const result = await query(
-        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\" FROM medical_records m JOIN patients p ON p.id=m.patient_id WHERE p.patient_id=$1 AND m.hospital_id=$2 AND p.status='confirmed' ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",m.created_at AS \"createdAt\",u.full_name AS \"authorName\" FROM medical_records m JOIN patients p ON p.id=m.patient_id LEFT JOIN users u ON u.id=m.created_by WHERE p.patient_id=$1 AND m.hospital_id=$2 AND p.status='confirmed' ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
         [publicPatientId, hospitalId]
       );
       return result.rows;
     },
     async listMedicalRecordsForPatient(patientId) {
       const result = await query(
-        "SELECT id,category,version_index AS \"versionIndex\",prior_record_id AS \"priorRecordId\",record_ref AS \"recordRef\",content_ciphertext AS \"contentCiphertext\",content_hash AS \"contentHash\",recorded_on AS \"recordedOn\",chain_status AS \"chainStatus\",tx_hash AS \"txHash\" FROM medical_records WHERE patient_id=$1 ORDER BY recorded_on ASC, created_at ASC, version_index ASC",
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",m.created_at AS \"createdAt\",u.full_name AS \"authorName\" FROM medical_records m LEFT JOIN users u ON u.id=m.created_by WHERE m.patient_id=$1 ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
         [patientId]
       );
       return result.rows;
@@ -521,6 +528,38 @@ function createDb(config) {
     async listAccessAuditForHospital(publicPatientId, hospitalId) {
       const result = await query(
         "SELECT e.actor_wallet AS \"actorWallet\", e.action_code AS \"actionCode\", e.reason_ciphertext AS \"reasonCiphertext\", e.reason_hash AS \"reasonHash\", e.tx_hash AS \"txHash\", e.expires_at AS \"expiresAt\", e.created_at AS \"createdAt\" FROM access_audit_events e JOIN patients p ON p.id = e.patient_id WHERE p.patient_id = $1 AND e.hospital_id = $2 ORDER BY e.created_at ASC",
+        [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
+    async createProfileNote({ publicPatientId, hospitalId, contentCiphertext, actorId }) {
+      const result = await query(
+        "INSERT INTO patient_profile_notes (patient_id, hospital_id, content_ciphertext, created_by) SELECT id, $2, $3, $4 FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed' RETURNING id",
+        [publicPatientId, hospitalId, contentCiphertext, actorId]
+      );
+      if (!result.rowCount) {
+        const error = new Error("Patient not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      return result.rows[0];
+    },
+    async listProfileNotes(publicPatientId, hospitalId) {
+      const result = await query(
+        "SELECT n.content_ciphertext AS \"contentCiphertext\", n.created_at AS \"createdAt\" FROM patient_profile_notes n JOIN patients p ON p.id=n.patient_id WHERE p.patient_id=$1 AND n.hospital_id=$2 ORDER BY n.created_at ASC",
+        [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
+    async createClinicalAudit(input) {
+      await query(
+        "INSERT INTO clinical_audit_events (hospital_id, patient_id, actor_id, actor_role, action, category, version_index, tx_hash) SELECT $1, id, $3, $4, $5, $6, $7, $8 FROM patients WHERE patient_id=$2 AND hospital_id=$1 AND status='confirmed'",
+        [input.hospitalId, input.publicPatientId, input.actorId || null, input.actorRole, input.action, input.category || null, Number.isInteger(input.versionIndex) ? input.versionIndex : null, input.txHash || null]
+      );
+    },
+    async listClinicalAudit(publicPatientId, hospitalId) {
+      const result = await query(
+        "SELECT e.action, e.actor_role AS \"actorRole\", e.category, e.version_index AS \"versionIndex\", e.tx_hash AS \"txHash\", e.created_at AS \"createdAt\", u.full_name AS \"authorName\" FROM clinical_audit_events e JOIN patients p ON p.id=e.patient_id LEFT JOIN users u ON u.id=e.actor_id WHERE p.patient_id=$1 AND e.hospital_id=$2 ORDER BY e.created_at ASC",
         [publicPatientId, hospitalId]
       );
       return result.rows;

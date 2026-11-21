@@ -3,7 +3,8 @@ const { getAddress, verifyMessage } = require("ethers");
 const { z } = require("zod");
 const { decryptJson, requiredKey } = require("./crypto");
 const { issuePatientToken, requirePatient } = require("./auth");
-const { presentClinicalRecord } = require("./clinicalRecords");
+const { presentClinicalRecord, assembleChart, sendSummaryPdf } = require("./clinicalRecords");
+const { emergencyCard } = require("./chart");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const CLAIM_DELAY_SECONDS = 60 * 60;
@@ -87,7 +88,7 @@ function presentConsentDoctor(row) {
 function profileFields(value) {
   const source = value && typeof value === "object" ? value : {};
   const profile = {};
-  for (const key of ["fullName", "dateOfBirth", "mobile", "email", "emergencyContact"]) {
+  for (const key of ["fullName", "dateOfBirth", "gender", "bloodGroup", "mobile", "email", "emergencyContact"]) {
     if (typeof source[key] === "string" && source[key].trim()) profile[key] = source[key].trim();
   }
   return profile;
@@ -230,6 +231,44 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         clinicalChart: "encrypted_separately",
         medicalRecordRegistry: "consent_required"
       });
+    } catch (error) { next(error); }
+  });
+
+  app.get("/patient-portal/chart", patient, async (req, res, next) => {
+    try {
+      const key = requiredKey(config.piiEncryptionKey, "PII_ENCRYPTION_KEY", 32);
+      const chart = await assembleChart({ db, blockchain, key, patient: req.patient, access: "patient" });
+      if (typeof db.createClinicalAudit === "function") {
+        await db.createClinicalAudit({
+          hospitalId: req.patient.hospital_id,
+          publicPatientId: req.patient.patientId,
+          actorRole: "patient",
+          action: "record_viewed"
+        });
+      }
+      res.json(chart);
+    } catch (error) { next(error); }
+  });
+
+  app.get("/patient-portal/chart.pdf", patient, async (req, res, next) => {
+    try {
+      const key = requiredKey(config.piiEncryptionKey, "PII_ENCRYPTION_KEY", 32);
+      const chart = await assembleChart({ db, blockchain, key, patient: req.patient, access: "patient" });
+      if (typeof db.createClinicalAudit === "function") {
+        await db.createClinicalAudit({
+          hospitalId: req.patient.hospital_id,
+          publicPatientId: req.patient.patientId,
+          actorRole: "patient",
+          action: "summary_exported"
+        });
+      }
+      sendSummaryPdf(res, chart);
+    } catch (error) { next(error); }
+  });
+
+  app.get("/patient-portal/emergency-card", patient, async (req, res, next) => {
+    try {
+      res.json(emergencyCard(req.patient.patientId));
     } catch (error) { next(error); }
   });
 

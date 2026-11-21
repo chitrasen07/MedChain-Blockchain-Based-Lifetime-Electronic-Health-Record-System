@@ -196,6 +196,16 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       onUnauthorized = typeof handler === "function" ? handler : null;
     },
     request,
+    async download(path) {
+      const headers = { Accept: "application/pdf" };
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+      const response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, { headers });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw errorForStatus(response.status, payload?.error || "");
+      }
+      return response.blob();
+    },
     async changePassword({ currentPassword, newPassword }) {
       return request("/auth/password", {
         method: "POST",

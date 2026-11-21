@@ -8,7 +8,7 @@ export function StaffOverviewPage() {
   return <WorkspaceScreen pageKey="staff-overview" />;
 }
 export function StaffLookupPage() {
-  return <PatientLookupScreen pageKey="staff-lookup" />;
+  return <PatientLookupScreen pageKey="staff-lookup" chart />;
 }
 export function StaffVisitsPage() {
   return <VisitReferenceScreen pageKey="staff-visits" />;

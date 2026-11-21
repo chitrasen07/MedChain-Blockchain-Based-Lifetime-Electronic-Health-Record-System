@@ -23,7 +23,9 @@ const profileSchema = z.object({
   dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   mobile: z.string().trim().max(40).optional(),
   email: z.string().email().max(320).optional(),
-  emergencyContact: z.string().trim().max(200).optional()
+  emergencyContact: z.string().trim().max(200).optional(),
+  gender: z.string().trim().max(40).optional(),
+  bloodGroup: z.string().trim().max(16).optional()
 });
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

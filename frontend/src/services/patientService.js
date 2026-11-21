@@ -4,7 +4,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function emptyProfile() {
-  return { fullName: "", dateOfBirth: "", mobile: "", email: "", emergencyContact: "", reviewCaseId: "" };
+  return { fullName: "", dateOfBirth: "", gender: "", bloodGroup: "", mobile: "", email: "", emergencyContact: "", reviewCaseId: "" };
 }
 
 export function validateProfile(input, { reviewCase = false } = {}) {
@@ -21,6 +21,8 @@ export function validateProfile(input, { reviewCase = false } = {}) {
   if (mobile.length > 40) errors.mobile = "Mobile must be 40 characters or fewer.";
   if (email && (!emailPattern.test(email) || email.length > 320)) errors.email = "Enter a valid email address.";
   if (emergencyContact.length > 200) errors.emergencyContact = "Emergency contact must be 200 characters or fewer.";
+  if ((input.gender || "").trim().length > 40) errors.gender = "Gender must be 40 characters or fewer.";
+  if ((input.bloodGroup || "").trim().length > 16) errors.bloodGroup = "Blood group must be 16 characters or fewer.";
   if (reviewCase && reviewCaseId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reviewCaseId)) {
     errors.reviewCaseId = "Enter the review case ID as a UUID, or leave it blank.";
   }
@@ -29,6 +31,8 @@ export function validateProfile(input, { reviewCase = false } = {}) {
   if (mobile) profile.mobile = mobile;
   if (email) profile.email = email;
   if (emergencyContact) profile.emergencyContact = emergencyContact;
+  if (input.gender?.trim()) profile.gender = input.gender.trim();
+  if (input.bloodGroup?.trim()) profile.bloodGroup = input.bloodGroup.trim();
 
   return { errors, profile, reviewCaseId };
 }

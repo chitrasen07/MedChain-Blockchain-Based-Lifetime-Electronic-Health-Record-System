@@ -210,6 +210,8 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
           <div className="grid gap-4 sm:grid-cols-2">
             <Input label="Full name" name="fullName" value={profile.fullName} error={errors.fullName} autoComplete="name" onChange={(event) => change("fullName", event.target.value)} />
             <Input label="Date of birth" name="dateOfBirth" type="date" value={profile.dateOfBirth} error={errors.dateOfBirth} onChange={(event) => change("dateOfBirth", event.target.value)} />
+            <Input label="Gender (optional)" name="gender" value={profile.gender || ""} onChange={(event) => change("gender", event.target.value)} />
+            <Input label="Blood group (optional)" name="bloodGroup" value={profile.bloodGroup || ""} onChange={(event) => change("bloodGroup", event.target.value)} />
             <Input label="Mobile" name="mobile" value={profile.mobile} error={errors.mobile} hint="Optional" autoComplete="tel" onChange={(event) => change("mobile", event.target.value)} />
             <Input label="Email" name="email" type="email" value={profile.email} error={errors.email} hint="Optional" autoComplete="email" onChange={(event) => change("email", event.target.value)} />
             <Input className="sm:col-span-2" label="Emergency contact" name="emergencyContact" value={profile.emergencyContact} error={errors.emergencyContact} hint="Optional" onChange={(event) => change("emergencyContact", event.target.value)} />

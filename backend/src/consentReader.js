@@ -30,6 +30,7 @@ function unavailable(fail) {
     checkEmergencyAccess: reject,
     emergencyCooldown: reject,
     listConsent: reject,
+    listConsentHistory: reject,
     listEmergency: reject,
     listAudit: reject,
     hasChainRole: reject,
@@ -181,6 +182,23 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
         });
       }
       return permissions;
+    },
+    async listConsentHistory(patientRef) {
+      const { access, fromBlock } = await scope();
+      const granted = await access.queryFilter(access.filters.AccessGranted(patientRef), fromBlock);
+      const revoked = await access.queryFilter(access.filters.AccessRevoked(patientRef), fromBlock);
+      return [
+        ...granted.map((event) => ({
+          action: "granted",
+          wallet: getAddress(event.args.authorizedAddress),
+          transaction: event.transactionHash || null
+        })),
+        ...revoked.map((event) => ({
+          action: "revoked",
+          wallet: getAddress(event.args.authorizedAddress),
+          transaction: event.transactionHash || null
+        }))
+      ];
     },
     async listEmergency(patientRef) {
       const { emergency, fromBlock } = await scope();

@@ -90,6 +90,7 @@ export const workspaces = {
       { label: "Health identity", to: "/patient/identity", icon: Fingerprint },
       { label: "Ownership", to: "/patient/ownership", icon: KeyRound },
       { label: "Visit history", to: "/patient/history", icon: ClipboardList },
+      { label: "Health record", to: "/patient/chart", icon: ClipboardList },
       { label: "Medical records", to: "/patient/records", icon: FileSearch },
       { label: "Access", to: "/patient/access", icon: ShieldCheck },
       { label: "Profile", to: "/patient/profile", icon: UserRound },
@@ -217,7 +218,7 @@ export const pages = {
     eyebrow: "Doctor",
     title: "Patient lookup",
     description:
-      "Find a confirmed patient in this hospital by patient ID. Results are identifiers only.",
+      "Open a confirmed patient's chart. Demographics and clinical entries stay encrypted and require consent or emergency access.",
     kind: "table",
     columns: [
       { key: "patientId", header: "Patient ID" },

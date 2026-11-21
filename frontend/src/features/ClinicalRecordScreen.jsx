@@ -14,6 +14,7 @@ import { ensurePatientSepolia } from "../lib/patientWallet";
 import { sepoliaTransactionUrl } from "../lib/ownership";
 import { pageChrome } from "../lib/pageChrome";
 import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
+import { exactAllergyAlert } from "../lib/chartView";
 import { CLINICAL_FIELDS, clinicalRequestBody, clinicalService } from "../services/clinicalService";
 
 const CATEGORY_LABELS = {
@@ -23,6 +24,7 @@ const CATEGORY_LABELS = {
   allergy: "Allergy",
   treatment: "Treatment",
   visit: "Hospital visit",
+  vital: "Vital signs",
 };
 
 const emptyFields = () => ({});
@@ -100,8 +102,19 @@ export function ClinicalRecordScreen({ pageKey }) {
     }
   }
 
+  function latestAllergies(records) {
+  const latest = new Map();
+  for (const record of records) {
+    if (record.category !== "allergy") continue;
+    const current = latest.get(record.recordRef);
+    if (!current || record.versionIndex >= current.versionIndex) latest.set(record.recordRef, record.content || {});
+  }
+  return [...latest.values()];
+}
+
   function anchorLabel(record) {
     if (record.chainStatus === "anchored") return "Anchored";
+    if (record.chainStatus === "failed" || record.chainStatus === "mismatch") return "Failed";
     if (record.transaction) return "Pending";
     return "Not anchored";
   }
@@ -190,6 +203,11 @@ export function ClinicalRecordScreen({ pageKey }) {
     const id = patientId.trim().toUpperCase();
     const body = clinicalRequestBody({ category, recordedOn, fields, priorRecordId });
     const missing = (CLINICAL_FIELDS[category] || []).filter(([name, , required]) => required && !body.fields[name]);
+    const measured = ["bloodPressure", "heartRate", "temperature", "spo2", "weight", "height", "bloodGlucose"].some((name) => body.fields[name]);
+    if (category === "vital" && !measured) {
+      setNotice("Enter at least one measured vital sign. Empty measurements are not saved.");
+      return;
+    }
     if (!/^PATIENT-[0-9]{1,12}$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(recordedOn) || missing.length) {
       setNotice("Enter the patient ID, the date, and the required clinical fields.");
       return;
@@ -248,6 +266,11 @@ export function ClinicalRecordScreen({ pageKey }) {
               />
             ))}
           </div>
+          {category === "prescription" && exactAllergyAlert(latestAllergies(records), fields.medication).length ? (
+            <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-danger">
+              Recorded allergy matches this medication exactly: {exactAllergyAlert(latestAllergies(records), fields.medication).map((item) => item.substance).join(", ")}. This is not a drug-interaction check.
+            </p>
+          ) : null}
           {notice ? <p role="alert" className="mt-4 rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">{notice}</p> : null}
           <div className="mt-4 flex flex-wrap gap-3">
             <Button type="button" variant="secondary" onClick={() => load(patientId.trim().toUpperCase())} loading={loading} disabled={loading || saving}>

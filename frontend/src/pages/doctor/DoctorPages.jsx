@@ -8,7 +8,7 @@ export function DoctorOverviewPage() {
   return <WorkspaceScreen pageKey="doctor-overview" />;
 }
 export function DoctorLookupPage() {
-  return <PatientLookupScreen pageKey="doctor-lookup" />;
+  return <PatientLookupScreen pageKey="doctor-lookup" chart />;
 }
 export function DoctorVisitsPage() {
   return <VisitReferenceScreen pageKey="doctor-visits" />;

@@ -3,17 +3,29 @@ import { apiClient } from "../lib/api.js";
 export const CLINICAL_FIELDS = {
   diagnosis: [
     ["condition", "Condition", true],
+    ["status", "Status (current or past)", false],
+    ["chronic", "Chronic (yes or no)", false],
     ["notes", "Notes", false],
   ],
   prescription: [
     ["medication", "Medication", true],
-    ["dose", "Dose", true],
+    ["dose", "Dosage", true],
+    ["frequency", "Frequency", false],
+    ["route", "Route", false],
+    ["duration", "Duration", false],
+    ["instructions", "Instructions", false],
+    ["startDate", "Start date", false],
+    ["endDate", "End date", false],
     ["directions", "Directions", false],
   ],
   laboratory: [
     ["testName", "Test", true],
     ["result", "Result", true],
     ["unit", "Unit", false],
+    ["referenceRange", "Reference range", false],
+    ["collectedOn", "Collection date", false],
+    ["resultDate", "Result date", false],
+    ["notes", "Clinician notes", false],
   ],
   allergy: [
     ["substance", "Substance", true],
@@ -21,11 +33,28 @@ export const CLINICAL_FIELDS = {
   ],
   treatment: [
     ["treatment", "Treatment", true],
+    ["kind", "Kind (surgery or treatment)", false],
     ["outcome", "Outcome", false],
   ],
   visit: [
     ["reason", "Reason", true],
     ["notes", "Notes", false],
+  ],
+  vital: [
+    ["bloodPressure", "Blood pressure", false],
+    ["bloodPressureUnit", "Blood pressure unit", false],
+    ["heartRate", "Heart rate", false],
+    ["heartRateUnit", "Heart rate unit", false],
+    ["temperature", "Temperature", false],
+    ["temperatureUnit", "Temperature unit", false],
+    ["spo2", "SpO2", false],
+    ["spo2Unit", "SpO2 unit", false],
+    ["weight", "Weight", false],
+    ["weightUnit", "Weight unit", false],
+    ["height", "Height", false],
+    ["heightUnit", "Height unit", false],
+    ["bloodGlucose", "Blood glucose", false],
+    ["bloodGlucoseUnit", "Blood glucose unit", false],
   ],
 };
 

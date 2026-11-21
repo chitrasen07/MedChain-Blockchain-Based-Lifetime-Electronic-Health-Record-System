@@ -25,6 +25,7 @@ import {
   PatientProfilePage,
   PatientRecordsPage,
 } from "./pages/patient/PatientPortalPages";
+import { PatientChartPage } from "./pages/patient/PatientChartPage";
 import {
   ReceptionistLookupPage,
   ReceptionistMatchingPage,
@@ -102,6 +103,7 @@ export default function App() {
             <Route path="/patient/identity" element={<PatientIdentityPage />} />
             <Route path="/patient/ownership" element={<PatientOwnershipPage />} />
             <Route path="/patient/history" element={<PatientHistoryPage />} />
+            <Route path="/patient/chart" element={<PatientChartPage />} />
             <Route path="/patient/records" element={<PatientRecordsPage />} />
             <Route path="/patient/access" element={<PatientAccessPage />} />
             <Route path="/patient/profile" element={<PatientProfilePage />} />

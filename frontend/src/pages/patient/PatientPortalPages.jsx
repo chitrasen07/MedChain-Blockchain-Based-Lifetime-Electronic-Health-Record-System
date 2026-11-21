@@ -16,6 +16,7 @@ import { grantCalldata, revokeCalldata, sendPreparedTransaction, transactionTarg
 import { ensurePatientSepolia } from "../../lib/patientWallet";
 import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode, sepoliaTransactionUrl } from "../../lib/ownership";
 import { useAuth } from "../../context/useAuth";
+import { anchorLabel, anchorTone } from "../../lib/chartView";
 import { claimStatusBody, clinicianLabel, patientAuthMessage, shortWallet } from "../../services/patientPortal";
 
 function usePortalGet(path) {
@@ -405,12 +406,12 @@ export function PatientRecordsPage() {
                 <li key={record.id} className="border-b border-line pb-4 last:border-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium capitalize text-navy">{record.category}</p>
-                    <StatusBadge tone="warning">Not anchored</StatusBadge>
+                    <StatusBadge tone={anchorTone(anchorLabel(record))}>{anchorLabel(record)}</StatusBadge>
                   </div>
                   <p className="mt-1 text-xs text-muted">{record.recordedOn} · version {record.versionIndex}</p>
                   <p className="mt-2 text-sm leading-6 text-ink">{Object.entries(record.content || {}).filter(([key]) => key !== "category" && key !== "recordedOn").map(([, value]) => value).join(" · ")}</p>
                   <p className="mt-1 break-all text-xs text-muted">{record.contentHash}</p>
-                  {explorer ? <a className="text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : <p className="text-xs text-muted">No transaction reference.</p>}
+                  {record.chainStatus === "anchored" && explorer ? <a className="text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : <p className="text-xs text-muted">{record.transaction ? "Anchor confirmation is still pending." : "No confirmed Sepolia transaction."}</p>}
                 </li>
               );
             })}
