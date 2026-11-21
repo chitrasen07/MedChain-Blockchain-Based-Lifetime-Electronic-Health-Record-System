@@ -71,32 +71,25 @@ export function validateProfile(input, { reviewCase = false } = {}) {
 
 export function describeMatch(result) {
   if (result?.status === "no_match") {
-    return "No confirmed patient in this hospital matched this profile.";
-  }
-  if (result?.status === "high_confidence") {
-    const patientId = result.patient?.patient_id || result.patientId;
-    return patientId
-      ? `A confirmed patient matches this profile. Patient ID ${patientId}.`
-      : "A confirmed patient matches this profile.";
+    return "No matching patient found. Registration is allowed.";
   }
   if (result?.status === "review_authorized") {
-    return "Different-person review accepted. This patient can be registered. No new review case was created.";
+    return "Different-person review accepted. Registration is allowed.";
   }
-  if (result?.status === "review_same_person" || result?.status === "existing_patient") {
+  if (result?.status === "high_confidence" || result?.status === "review_same_person" || result?.status === "existing_patient") {
     const patientId = result.patientId || result.patient?.patient_id;
     return patientId
-      ? `This profile is already registered as ${patientId}. A new Patient ID was not created.`
-      : "This profile is already registered. A new Patient ID was not created.";
+      ? `Same-person match. This profile is already registered as ${patientId}. A new Patient ID was not created.`
+      : "Same-person match. This profile is already registered. A new Patient ID was not created.";
   }
   if (result?.status === "review_required") {
     if (result.reviewState === "new_candidates") {
       return result.message || "A new possible match appeared after the earlier review. Resolve the new review case before registering.";
     }
     if (result.reviewState === "pending") {
-      return "This review case is still pending. Registration stays blocked until a reviewer marks the person as different.";
+      return "Possible duplicate. This review is still pending, so registration stays blocked until a reviewer marks the person as different.";
     }
-    const count = Number.isInteger(result.candidateCount) ? `${result.candidateCount} candidate(s). ` : "";
-    return `${count}This possible match needs review. It was not sent to the chain.`;
+    return "Possible duplicate. Review is required before this patient can be registered.";
   }
   return "The match result could not be read.";
 }

@@ -316,11 +316,24 @@ function createDb(config) {
           }
           return { ...existing.rows[0], claimed: false };
         }
-        const result = await client.query(
-          "INSERT INTO registration_transactions (patient_id,hospital_id,controller,identity_commitment,status) VALUES ($1,$2,$3,$4,'submitting') RETURNING id,status,tx_hash AS \"txHash\"",
-          [patientId, hospitalId, controller, identityCommitment]
-        );
-        return { ...result.rows[0], claimed: true };
+        await client.query("SAVEPOINT registration_claim");
+        try {
+          const result = await client.query(
+            "INSERT INTO registration_transactions (patient_id,hospital_id,controller,identity_commitment,status) VALUES ($1,$2,$3,$4,'submitting') RETURNING id,status,tx_hash AS \"txHash\"",
+            [patientId, hospitalId, controller, identityCommitment]
+          );
+          await client.query("RELEASE SAVEPOINT registration_claim");
+          return { ...result.rows[0], claimed: true };
+        } catch (error) {
+          await client.query("ROLLBACK TO SAVEPOINT registration_claim");
+          if (error.code !== "23505") throw error;
+          const raced = await client.query(
+            "SELECT id,status,tx_hash AS \"txHash\",patient_id_on_chain AS \"patientId\",did_on_chain AS did,controller,last_error AS \"lastError\" FROM registration_transactions WHERE patient_id=$1 AND hospital_id=$2 FOR UPDATE",
+            [patientId, hospitalId]
+          );
+          if (!raced.rowCount) throw error;
+          return { ...raced.rows[0], claimed: false };
+        }
       });
     },
     async markRegistrationSubmitted(id, txHash) {
@@ -346,14 +359,15 @@ function createDb(config) {
       return result.rows[0] || null;
     },
     async matchPatient(profile, hospitalId) {
-      const hashes = identityHashes(profile);
-      if (!hashes.length) return { status: "no_match", candidateCount: 0 };
+      const hashes = identifyingHashes(identityHashes(profile));
+      if (!hashes.length) return { status: "no_match", candidateCount: 0, candidates: [] };
       const values = [hospitalId, ...hashes.flat()];
-      const pairs = hashes.map((_, i) => `($${i * 2 + 2},$${i * 2 + 3})`).join(",");
-      const result = await query("SELECT p.id,p.patient_id,p.did,count(*)::int AS score FROM patients p JOIN patient_identity_hashes h ON h.patient_id=p.id WHERE p.hospital_id=$1 AND p.status='confirmed' AND (h.field_name,h.field_hash) IN (" + pairs + ") GROUP BY p.id,p.patient_id,p.did ORDER BY score DESC", values);
-      if (!result.rows.length) return { status: "no_match", candidateCount: 0, candidates: [] };
-      if (result.rows[0].score >= 3 && (result.rows.length === 1 || result.rows[0].score > result.rows[1].score)) return { status: "high_confidence", patient: result.rows[0], candidates: result.rows.map((row) => row.id) };
-      return { status: "possible_match", candidateCount: result.rows.length, candidates: result.rows.map((row) => row.id) };
+      const pairs = hashes.map((_, index) => `($${index * 2 + 2},$${index * 2 + 3})`).join(",");
+      const result = await query(
+        `SELECT p.id, p.patient_id, p.did, h.field_name AS "fieldName" FROM patients p JOIN patient_identity_hashes h ON h.patient_id=p.id WHERE p.hospital_id=$1 AND p.status='confirmed' AND (h.field_name,h.field_hash) IN (${pairs})`,
+        values
+      );
+      return decidePatientMatch(result.rows);
     },
     async getPatient(patientId, hospitalId) {
       const result = await query("SELECT patient_id AS \"patientId\",did,status,created_at AS \"createdAt\" FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed'", [patientId, hospitalId]);
@@ -420,11 +434,15 @@ function createDb(config) {
     },
     async getReviewRegistration(reviewCaseId, hospitalId) {
       const result = await query(
-        "SELECT p.id FROM review_cases rc JOIN patients p ON p.id=rc.new_patient_id WHERE rc.id=$1 AND rc.hospital_id=$2 AND rc.case_status='resolved_different' AND p.status='pending'",
+        "SELECT p.id, p.status AS \"patientStatus\", rc.case_status AS \"caseStatus\" FROM review_cases rc JOIN patients p ON p.id=rc.new_patient_id WHERE rc.id=$1 AND rc.hospital_id=$2",
         [reviewCaseId, hospitalId]
       );
-      if (!result.rowCount) throw Object.assign(new Error("Registration review is not ready"), { statusCode: 409 });
-      return result.rows[0];
+      const row = result.rows[0];
+      if (row?.caseStatus === "resolved_different" && row.patientStatus === "pending") return { id: row.id };
+      if (row?.caseStatus === "resolved_different") {
+        throw Object.assign(new Error("This review case has already been used for a registration."), { statusCode: 409 });
+      }
+      throw Object.assign(new Error("Registration review is not ready"), { statusCode: 409 });
     },
     async findConfirmedPatientForAuth(publicId) {
       const result = await query(
@@ -674,11 +692,19 @@ function createDb(config) {
   };
 }
 
+function reviewCandidateIds(values) {
+  if (!values) return [];
+  const source = Array.isArray(values) ? values : String(values).replace(/^\{|\}$/g, "").split(",");
+  return source.map((id) => String(id).trim().toLowerCase()).filter((id) => id && id !== "null");
+}
+
 function classifyReview(review, { candidateIds = [], highConfidenceId = "" } = {}) {
-  const candidates = new Set(review.candidateIds || []);
+  const candidates = new Set(reviewCandidateIds(review.candidateIds));
+  const incoming = reviewCandidateIds(candidateIds);
+  const strongId = String(highConfidenceId || "").trim().toLowerCase();
   const base = { reviewCaseId: review.id, newPatientId: review.newPatientId || null };
   if (review.case_status === "pending") {
-    const novel = candidateIds.filter((id) => !candidates.has(id));
+    const novel = incoming.filter((id) => !candidates.has(id));
     return novel.length ? { ...base, action: "add_candidates" } : { ...base, action: "pending" };
   }
   if (review.case_status === "rejected") return { ...base, action: "rejected" };
@@ -686,8 +712,8 @@ function classifyReview(review, { candidateIds = [], highConfidenceId = "" } = {
     return { ...base, action: "same_person", patientId: review.linkedPublicId || null };
   }
   if (review.case_status === "resolved_different" && review.patientStatus === "pending") {
-    if (highConfidenceId && !candidates.has(highConfidenceId)) return { action: "existing" };
-    const novel = candidateIds.filter((id) => !candidates.has(id));
+    if (strongId && !candidates.has(strongId)) return { action: "existing" };
+    const novel = incoming.filter((id) => !candidates.has(id));
     if (novel.length) return { ...base, action: "new_candidates" };
     return { ...base, action: "authorized" };
   }
@@ -719,4 +745,49 @@ async function loadReviewAuthorizations(query, hospitalId, { reviewCaseId, finge
   return result.rows;
 }
 
-module.exports = { createDb, poolConfig, classifyReview };
+const IDENTIFYING_FIELDS = new Set(["fullName", "dateOfBirth", "mobile", "email"]);
+
+function identifyingHashes(hashes) {
+  return (hashes || []).filter(([field]) => IDENTIFYING_FIELDS.has(field));
+}
+
+function classifyIdentityOverlap(fieldNames) {
+  const fields = new Set((fieldNames || []).filter((name) => IDENTIFYING_FIELDS.has(name)));
+  if (!fields.size) return "none";
+  const name = fields.has("fullName");
+  const dob = fields.has("dateOfBirth");
+  const contact = fields.has("mobile") || fields.has("email");
+  if ((name && dob && contact) || fields.size >= 3) return "high";
+  if (fields.has("mobile") || fields.has("email") || name) return "possible";
+  return "none";
+}
+
+function decidePatientMatch(rows) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const id = String(row.id || "").trim().toLowerCase();
+    if (!id) continue;
+    const current = grouped.get(id) || { id, patient_id: row.patient_id || row.patientId || null, did: row.did || null, fields: [] };
+    const field = row.fieldName || row.field_name;
+    if (field) current.fields.push(field);
+    grouped.set(id, current);
+  }
+  const ranked = [...grouped.values()]
+    .map((row) => ({ ...row, strength: classifyIdentityOverlap(row.fields) }))
+    .filter((row) => row.strength !== "none");
+  if (!ranked.length) return { status: "no_match", candidateCount: 0, candidates: [] };
+  const high = ranked.filter((row) => row.strength === "high");
+  const candidates = ranked.map((row) => row.id);
+  if (high.length === 1) {
+    const patient = high[0];
+    return {
+      status: "high_confidence",
+      patient: { id: patient.id, patient_id: patient.patient_id, did: patient.did },
+      candidateCount: ranked.length,
+      candidates
+    };
+  }
+  return { status: "possible_match", candidateCount: ranked.length, candidates };
+}
+
+module.exports = { createDb, poolConfig, classifyReview, decidePatientMatch, identifyingHashes };

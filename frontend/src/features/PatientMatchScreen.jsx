@@ -102,7 +102,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     try {
       const result = await patientService.match(parsed.profile, parsed.reviewCaseId);
       setMatch(result);
-      if (result?.reviewCaseId && (result.status === "review_authorized" || result.status === "review_required")) {
+      if (result?.reviewCaseId && (result.status === "review_authorized" || (result.status === "review_required" && (!profile.reviewCaseId || result.reviewState === "new_candidates")))) {
         setProfile((current) => ({ ...current, reviewCaseId: result.reviewCaseId }));
       }
     } catch (error) {
@@ -231,7 +231,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 name="reviewCaseId"
                 value={profile.reviewCaseId}
                 error={errors.reviewCaseId}
-                hint="Use the case ID after a different-person decision. Check for a match again. Pending, rejected, mismatched, and already-used cases cannot register."
+                hint="After a different-person decision, keep this case ID and check for a match again. A pending, rejected, already-used, or changed-identity case explains why registration stays blocked."
                 onChange={(event) => change("reviewCaseId", event.target.value)}
               />
             ) : null}

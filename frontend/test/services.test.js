@@ -42,8 +42,10 @@ describe("patient and visit requests", () => {
     assert.equal(JSON.parse(seen.options.body).reviewCaseId, "11111111-1111-4111-8111-111111111111");
     assert.equal(registrationReady({ status: "review_authorized" }), true);
     assert.equal(registrationReady({ status: "review_required" }), false);
-    assert.match(describeMatch({ status: "review_authorized" }), /No new review case/);
-    assert.match(describeMatch({ status: "review_same_person", patientId: "PATIENT-000001" }), /already registered/);
+    assert.match(describeMatch({ status: "no_match" }), /No matching patient found/);
+    assert.match(describeMatch({ status: "review_required" }), /Review is required/);
+    assert.match(describeMatch({ status: "review_authorized" }), /Registration is allowed/);
+    assert.match(describeMatch({ status: "review_same_person", patientId: "PATIENT-000001" }), /Same-person match/);
     assert.equal(result.status, "no_match");
     assert.equal(seen.url, "http://127.0.0.1:9/patients/match");
     assert.equal(seen.options.headers.Authorization.startsWith("Bearer "), true);

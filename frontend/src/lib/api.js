@@ -57,7 +57,7 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "This review case is still pending. Registration stays blocked until a reviewer marks the person as different.",
   "This review linked the profile to an existing patient. A new Patient ID was not created.",
   "This review was rejected. Registration is not authorized.",
-  "This review case does not match the patient details entered.",
+  "This review is invalid because the entered patient details do not match that case.",
   "This review case has already been used for a registration.",
   "That review case was not found.",
   "A new possible match appeared after this review. Review the new case before registering.",

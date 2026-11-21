@@ -70,6 +70,7 @@ function appFor(action, match = { status: "possible_match", candidateCount: 1, c
 test("review classification keeps a different-person decision specific", () => {
   const review = { id: caseId, case_status: "resolved_different", patientStatus: "pending", candidateIds: [candidate], newPatientId: "row" };
   assert.equal(classifyReview(review, { candidateIds: [candidate] }).action, "authorized");
+  assert.equal(classifyReview({ ...review, candidateIds: `{${candidate.toUpperCase()}}` }, { candidateIds: [candidate] }).action, "authorized");
   assert.equal(classifyReview(review, { candidateIds: [candidate, novel] }).action, "new_candidates");
   assert.equal(classifyReview({ ...review, case_status: "resolved_same", linkedPublicId: "PATIENT-000009" }).action, "same_person");
   assert.equal(classifyReview({ ...review, case_status: "rejected" }).action, "rejected");
@@ -85,6 +86,19 @@ test("a new patient with no match can be registered once", async () => {
   assert.equal(calls.includes("createReviewCase"), false);
   assert.equal(calls.includes("createPendingPatient"), true);
   assert.equal(calls.filter((name) => name === "submitRegistration").length, 1);
+});
+
+test("an old weak review does not block a patient with no identifying match", async () => {
+  const { app, calls } = appFor({ action: "pending", reviewCaseId: caseId }, { status: "no_match", candidateCount: 0, candidates: [] });
+  const checked = await request(app).post("/patients/match").set("Authorization", auth()).send({ ...profile, reviewCaseId: caseId });
+  assert.equal(checked.status, 200);
+  assert.equal(checked.body.status, "no_match");
+  const registered = await request(app).post("/patients").set("Authorization", auth()).send({ ...profile, reviewCaseId: caseId, claimCommitment: claim });
+  assert.equal(registered.status, 202);
+  assert.equal(registered.body.status, "registration_submitted");
+  assert.equal(calls.includes("createReviewCase"), false);
+  assert.equal(calls.includes("getReviewRegistration"), false);
+  assert.equal(calls.includes("createPendingPatient"), true);
 });
 
 test("a possible match opens one review case", async () => {
@@ -143,7 +157,7 @@ test("same person, rejected, mismatched, missing, and used reviews do not create
   const mismatched = appFor({ action: "mismatch" });
   const mismatchedResponse = await request(mismatched.app).post("/patients").set("Authorization", token).send({ ...profile, reviewCaseId: caseId, claimCommitment: claim });
   assert.equal(mismatchedResponse.status, 409);
-  assert.match(mismatchedResponse.body.error, /does not match/);
+  assert.match(mismatchedResponse.body.error, /do not match/);
 
   const missing = appFor({ action: "not_found" });
   const missingResponse = await request(missing.app).post("/patients/match").set("Authorization", token).send({ ...profile, reviewCaseId: caseId });
@@ -151,8 +165,8 @@ test("same person, rejected, mismatched, missing, and used reviews do not create
 
   const used = appFor({ action: "used", patientId: "PATIENT-000004" });
   const usedResponse = await request(used.app).post("/patients").set("Authorization", token).send({ ...profile, reviewCaseId: caseId, claimCommitment: claim });
-  assert.equal(usedResponse.status, 200);
-  assert.equal(usedResponse.body.patientId, "PATIENT-000004");
+  assert.equal(usedResponse.status, 409);
+  assert.match(usedResponse.body.error, /already been used/);
 
   for (const harness of [same, rejected, mismatched, missing, used]) {
     assert.equal(harness.calls.includes("createReviewCase"), false);

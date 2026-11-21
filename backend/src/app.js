@@ -36,7 +36,7 @@ const DUPLICATE_COMMITMENT_MESSAGE = "A patient with this identity commitment is
 const REVIEW_PENDING = "This review case is still pending. Registration stays blocked until a reviewer marks the person as different.";
 const REVIEW_SAME = "This review linked the profile to an existing patient. A new Patient ID was not created.";
 const REVIEW_REJECTED = "This review was rejected. Registration is not authorized.";
-const REVIEW_MISMATCH = "This review case does not match the patient details entered.";
+const REVIEW_MISMATCH = "This review is invalid because the entered patient details do not match that case.";
 const REVIEW_USED = "This review case has already been used for a registration.";
 const REVIEW_MISSING = "That review case was not found.";
 const REVIEW_NEW = "A new possible match appeared after this review. Review the new case before registering.";
@@ -63,6 +63,9 @@ function sendJson(res, status, body) {
 }
 
 async function respondToReview(res, db, { gate, result, profile, hashes, actorId, hospitalId, registering }) {
+  if (result.status === "no_match" && ["pending", "add_candidates", "new_candidates", "create"].includes(gate.action)) {
+    return false;
+  }
   if (gate.action === "authorized") {
     if (registering) return false;
     return sendJson(res, 200, {
@@ -87,7 +90,8 @@ async function respondToReview(res, db, { gate, result, profile, hashes, actorId
     }
     return sendJson(res, 409, { error: REVIEW_PENDING });
   }
-  if (gate.action === "same_person" || gate.action === "used" || gate.action === "existing") {
+  if (gate.action === "used") return sendJson(res, 409, { error: REVIEW_USED });
+  if (gate.action === "same_person" || gate.action === "existing") {
     const patientId = gate.patientId || result.patient?.patient_id;
     if (registering) return sendJson(res, 200, { status: "existing_patient", patientId });
     return sendJson(res, 200, {
@@ -330,6 +334,7 @@ function createApp({ db, blockchain, config }) {
       const match = await db.matchPatient(profile, req.user.hospital_id);
       const gate = await reviewGate(db, { hospitalId: req.user.hospital_id, hashes, reviewCaseId, match });
       if (gate.action === "authorized") reviewCaseId = gate.reviewCaseId;
+      else if (reviewCaseId && match.status === "no_match" && ["pending", "add_candidates", "new_candidates"].includes(gate.action)) reviewCaseId = null;
       const held = await respondToReview(res, db, {
         gate,
         result: match,
