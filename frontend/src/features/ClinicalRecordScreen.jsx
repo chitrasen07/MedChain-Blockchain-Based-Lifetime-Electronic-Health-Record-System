@@ -29,13 +29,15 @@ const CATEGORY_LABELS = {
 
 const emptyFields = () => ({});
 
-export function ClinicalRecordScreen({ pageKey }) {
+export function ClinicalRecordScreen({ pageKey, canWrite = true, canAnchor = true }) {
   const { page, crumbs } = pageChrome(pageKey);
   const [patientId, setPatientId] = useState("");
   const [category, setCategory] = useState("diagnosis");
   const [recordedOn, setRecordedOn] = useState("");
   const [fields, setFields] = useState(emptyFields);
   const [priorRecordId, setPriorRecordId] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [workflowStatus, setWorkflowStatus] = useState("reviewed");
   const [records, setRecords] = useState([]);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
@@ -112,11 +114,12 @@ export function ClinicalRecordScreen({ pageKey }) {
   return [...latest.values()];
 }
 
-  function anchorLabel(record) {
+  function reportStatus(record) {
     if (record.chainStatus === "anchored") return "Anchored";
     if (record.chainStatus === "failed" || record.chainStatus === "mismatch") return "Failed";
-    if (record.transaction) return "Pending";
-    return "Not anchored";
+    if (record.workflowStatus === "draft") return "Draft";
+    if (record.workflowStatus === "pending_review") return "Pending Review";
+    return "Reviewed";
   }
 
   async function anchorRecord(record) {
@@ -198,14 +201,28 @@ export function ClinicalRecordScreen({ pageKey }) {
     }
   }
 
+  function correct(record) {
+    setPriorRecordId(record.id);
+    setCategory(record.category);
+    setRecordedOn(record.recordedOn || "");
+    setFields(record.content || {});
+    setCorrectionReason("");
+    setNotice("Add the correction reason, then save a new version. The previous version stays stored.");
+  }
+
   async function onSubmit(event) {
     event.preventDefault();
+    if (saving) return;
     const id = patientId.trim().toUpperCase();
-    const body = clinicalRequestBody({ category, recordedOn, fields, priorRecordId });
+    const body = clinicalRequestBody({ category, recordedOn, fields, priorRecordId, correctionReason, workflowStatus });
     const missing = (CLINICAL_FIELDS[category] || []).filter(([name, , required]) => required && !body.fields[name]);
     const measured = ["bloodPressure", "heartRate", "temperature", "spo2", "weight", "height", "bloodGlucose"].some((name) => body.fields[name]);
     if (category === "vital" && !measured) {
       setNotice("Enter at least one measured vital sign. Empty measurements are not saved.");
+      return;
+    }
+    if (priorRecordId && correctionReason.trim().length < 3) {
+      setNotice("Enter a correction reason before saving a new version.");
       return;
     }
     if (!/^PATIENT-[0-9]{1,12}$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(recordedOn) || missing.length) {
@@ -218,6 +235,8 @@ export function ClinicalRecordScreen({ pageKey }) {
       await clinicalService.create(id, body);
       setFields(emptyFields());
       setPriorRecordId("");
+      setCorrectionReason("");
+      setNotice(priorRecordId ? "Corrected version saved. The previous version is unchanged." : "Report saved.");
       await load(id);
     } catch (error) {
       setNotice(error instanceof ApiError ? messageForRequest(error) : "The hospital service could not complete the request.");
@@ -232,10 +251,10 @@ export function ClinicalRecordScreen({ pageKey }) {
       <VerificationNotice>
         Saving a chart stores encrypted data only after the wallet has a clinical role and the patient has granted consent. Anchoring the hash on Sepolia asks MetaMask to approve. The hospital signing key is not used.
       </VerificationNotice>
-      <form onSubmit={onSubmit} noValidate>
+      {canWrite ? <form onSubmit={onSubmit} noValidate>
         <Card
-          title="Clinical entry"
-          description="The entry is encrypted in the hospital database. Reading or saving it requires the connected wallet to have patient consent or emergency access. The hospital signing key is not used."
+          title={priorRecordId ? "Create corrected version" : "Add report"}
+          description="The report is encrypted in the hospital database. Saving it requires the connected wallet to have the clinical role and patient consent. A correction stores a new version and leaves the previous ciphertext unchanged."
         >
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <Button type="button" variant="secondary" onClick={connectWallet}>Connect clinical wallet</Button>
@@ -248,14 +267,21 @@ export function ClinicalRecordScreen({ pageKey }) {
             <Select label="Category" value={category} onChange={(event) => { setCategory(event.target.value); setFields(emptyFields()); }}>
               {Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </Select>
+            <Select label="Save as" value={workflowStatus} onChange={(event) => setWorkflowStatus(event.target.value)}>
+              <option value="reviewed">Reviewed</option>
+              <option value="draft">Draft</option>
+            </Select>
             <Select label="Version" value={priorRecordId} onChange={(event) => setPriorRecordId(event.target.value)}>
               <option value="">New record</option>
               {records.map((record) => (
                 <option key={record.id} value={record.id}>
-                  Version of {CATEGORY_LABELS[record.category] || record.category} · {record.recordedOn}
+                  Version of {CATEGORY_LABELS[record.category] || record.category} · {record.recordedOn} · v{record.versionIndex}
                 </option>
               ))}
             </Select>
+            {priorRecordId ? (
+              <Input className="sm:col-span-2" label="Correction reason" name="correctionReason" value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} />
+            ) : null}
             {(CLINICAL_FIELDS[category] || []).map(([name, label, required]) => (
               <Input
                 key={name}
@@ -276,13 +302,23 @@ export function ClinicalRecordScreen({ pageKey }) {
             <Button type="button" variant="secondary" onClick={() => load(patientId.trim().toUpperCase())} loading={loading} disabled={loading || saving}>
               Load history
             </Button>
-            <Button type="submit" loading={saving} disabled={loading || saving || !walletAddress}>Save encrypted entry</Button>
+            <Button type="submit" loading={saving} disabled={loading || saving || !walletAddress}>{priorRecordId ? "Create corrected version" : "Add report"}</Button>
           </div>
           <p className="mt-3 text-xs leading-5 text-muted">
             Anchoring is signed by the consented clinical wallet in MetaMask. A wallet without the Doctor role cannot save or anchor a record. The hospital signing key cannot grant consent or submit the hash.
           </p>
         </Card>
-      </form>
+      </form> : (
+        <Card title="Clinical history" description="Hospital staff submit vitals, visit notes, and laboratory reports from the nursing pages. A doctor reviews them before they are finalized. This page can still load records when the connected wallet has consent.">
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <Button type="button" variant="secondary" onClick={connectWallet}>Connect clinical wallet</Button>
+            <p className="text-sm text-muted">{walletAddress || "No clinical wallet connected."}</p>
+          </div>
+          <Input label="Patient ID" name="patientId" value={patientId} onChange={(event) => setPatientId(event.target.value)} placeholder="PATIENT-000001" />
+          {notice ? <p role="status" className="mt-4 rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">{notice}</p> : null}
+          <Button className="mt-4" type="button" variant="secondary" loading={loading} disabled={loading} onClick={() => load(patientId.trim().toUpperCase())}>Load history</Button>
+        </Card>
+      )}
       <Card className="mt-4" title="Stored entries">
         {records.length === 0 ? (
           <EmptyState title="No clinical entries" description="Load a patient to see encrypted entries already stored for this hospital. Nothing is invented here." />
@@ -295,15 +331,21 @@ export function ClinicalRecordScreen({ pageKey }) {
                   <span className="absolute top-1.5 -left-[1.45rem] h-2.5 w-2.5 rounded-full bg-teal" aria-hidden="true" />
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium text-navy">{CATEGORY_LABELS[record.category] || record.category}</p>
-                    <StatusBadge tone={record.chainStatus === "anchored" ? "success" : "warning"}>{anchorLabel(record)}</StatusBadge>
+                    <StatusBadge tone={reportStatus(record) === "Anchored" ? "success" : reportStatus(record) === "Failed" ? "danger" : "warning"}>{reportStatus(record)}</StatusBadge>
                   </div>
-                  <p className="mt-1 text-xs text-muted">{record.recordedOn} · version {record.versionIndex}</p>
+                  <p className="mt-1 text-xs text-muted">
+                    {record.recordedOn} · version {record.versionIndex}
+                    {record.authorName ? ` · ${record.authorName}` : ""}
+                    {record.createdAt ? ` · ${new Date(record.createdAt).toLocaleString()}` : ""}
+                  </p>
+                  {record.correctionReason ? <p className="mt-1 text-xs text-muted">Correction: {record.correctionReason}</p> : null}
                   <p className="mt-2 text-sm leading-6 text-ink">{Object.entries(record.content || {}).filter(([key]) => key !== "category" && key !== "recordedOn").map(([, value]) => value).join(" · ")}</p>
                   <p className="mt-1 break-all text-xs text-muted">{record.contentHash}</p>
                   {explorer ? <a className="mt-1 inline-flex break-all text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : <p className="mt-1 text-xs text-muted">No transaction reference.</p>}
-                  <Button className="mt-2" type="button" variant="secondary" loading={sendingAnchor} disabled={!walletAddress || sendingAnchor || record.chainStatus === "anchored"} onClick={() => anchorRecord(record)}>
+                  {canWrite ? <Button className="mt-2 mr-2" type="button" variant="secondary" onClick={() => correct(record)}>Create corrected version</Button> : null}
+                  {canAnchor ? <Button className="mt-2" type="button" variant="secondary" loading={sendingAnchor} disabled={!walletAddress || sendingAnchor || record.chainStatus === "anchored" || record.workflowStatus === "draft"} onClick={() => anchorRecord(record)}>
                     {record.chainStatus === "anchored" ? "Anchored" : "Anchor this version"}
-                  </Button>
+                  </Button> : null}
                 </li>
               );
             })}

@@ -98,6 +98,9 @@ function assessAnchor(input = {}) {
   if (input.expectedCalldata && input.calldata && input.expectedCalldata !== input.calldata) {
     return { ok: false, status: 403, message: "The prepared transaction did not match this record. No transaction was sent." };
   }
+  if (input.workflowStatus === "draft" || input.workflowStatus === "pending_review") {
+    return { ok: false, status: 403, message: "This report is not ready to anchor. No transaction was sent." };
+  }
   if (input.chainStatus === "anchored" || Number(input.onChainVersions) > Number(input.versionIndex)) {
     return { ok: false, status: 409, message: "This version is already anchored. No transaction was sent." };
   }

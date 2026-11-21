@@ -29,8 +29,8 @@ const CATEGORIES = {
   laboratory: { testName: true, result: true, unit: false, referenceRange: false, collectedOn: false, resultDate: false, notes: false },
   allergy: { substance: true, reaction: false },
   treatment: { treatment: true, outcome: false, kind: false },
-  visit: { reason: true, notes: false },
-  vital: { bloodPressure: false, heartRate: false, temperature: false, spo2: false, weight: false, height: false, bloodGlucose: false }
+  visit: { reason: true, notes: false, symptoms: false, observations: false, checkInAt: false },
+  vital: { bloodPressure: false, heartRate: false, temperature: false, spo2: false, respiratoryRate: false, weight: false, height: false, bloodGlucose: false, notes: false }
 };
 
 const ANCHOR_REFUSAL = "The hospital wallet cannot anchor a medical record. Patient consent is required.";
@@ -105,6 +105,7 @@ const VITAL_UNITS = {
   heartRate: "bpm",
   temperature: "C",
   spo2: "%",
+  respiratoryRate: "breaths/min",
   weight: "kg",
   height: "cm",
   bloodGlucose: "mg/dL"
@@ -173,12 +174,24 @@ function presentClinicalRecord(row, key) {
     recordRef: row.recordRef,
     contentHash: row.contentHash,
     chainStatus: row.chainStatus || "consent_required",
+    workflowStatus: row.workflowStatus || "reviewed",
     transaction: row.txHash || null,
     priorRecordId: row.priorRecordId || null,
     authorName: row.authorName || null,
     createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
+    correctionReason: correctionReasonFor(row, key),
     content
   };
+}
+
+function correctionReasonFor(row, key) {
+  if (!row.correctionReasonCiphertext) return null;
+  try {
+    const value = decryptJson(row.correctionReasonCiphertext, key);
+    return typeof value?.reason === "string" && value.reason.trim() ? value.reason.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 function todayUtc() {
@@ -221,11 +234,17 @@ function anchorRecordFacts(record) {
   return {
     versionIndex: Number(record.versionIndex),
     chainStatus: record.chainStatus,
+    workflowStatus: record.workflowStatus || "reviewed",
     pendingHash: record.txHash || "",
     contentHash: record.contentHash,
     preparedHash: record.contentHash
   };
 }
+
+const DOCTOR_REPORTS = new Set(["diagnosis", "prescription", "allergy", "treatment", "laboratory", "visit", "vital"]);
+const DOCTOR_ONLY = "Only a doctor can create or correct this report.";
+const DOCTOR_ANCHOR = "Only a doctor can anchor a clinical record.";
+const CORRECTION_REASON = "Enter a correction reason before saving a new version.";
 
 function registerClinicalRecords(app, { db, blockchain, config, authRateLimit }) {
   const clinical = requireAuth(
@@ -284,8 +303,16 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
         category: z.enum(["diagnosis", "prescription", "laboratory", "allergy", "treatment", "visit", "vital"]),
         recordedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         fields: z.record(z.string(), z.string().max(2000)),
-        priorRecordId: z.string().uuid().optional()
+        priorRecordId: z.string().uuid().optional(),
+        correctionReason: z.string().trim().max(500).optional(),
+        workflowStatus: z.enum(["draft", "reviewed"]).optional()
       }).parse(req.body);
+      if (req.user.role !== "doctor" || !DOCTOR_REPORTS.has(input.category)) {
+        return res.status(403).json({ error: DOCTOR_ONLY });
+      }
+      if (input.priorRecordId && (input.correctionReason || "").trim().length < 3) {
+        return res.status(400).json({ error: CORRECTION_REASON });
+      }
       if (input.recordedOn > todayUtc()) {
         return res.status(400).json({ error: "Invalid request" });
       }
@@ -333,7 +360,9 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
         contentCiphertext: encryptJson(content, key()),
         contentHash,
         recordedOn: input.recordedOn,
-        actorId: req.user.sub
+        actorId: req.user.sub,
+        correctionReasonCiphertext: priorRecordId ? encryptJson({ reason: input.correctionReason.trim() }, key()) : null,
+        workflowStatus: input.workflowStatus || "reviewed"
       });
       res.status(201).json({
         id: saved.id,
@@ -343,8 +372,10 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
         recordRef: saved.recordRef,
         contentHash: saved.contentHash,
         chainStatus: saved.chainStatus,
+        workflowStatus: saved.workflowStatus || input.workflowStatus || "reviewed",
         transaction: null,
         priorRecordId: saved.priorRecordId,
+        correctionReason: priorRecordId ? input.correctionReason.trim() : null,
         content,
         access: mode,
         anchoring: "prepared",
@@ -389,6 +420,7 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
 
   app.post("/patients/:patientId/records/:recordId/anchor", clinical, async (req, res, next) => {
     try {
+      if (req.user.role !== "doctor") return res.status(403).json({ error: DOCTOR_ANCHOR });
       const patient = await db.getPatient(req.params.patientId, req.user.hospital_id);
       if (!patient) return res.status(404).json({ error: "Patient not found" });
       const wallet = await boundWallet(db, req.user.sub);
@@ -425,6 +457,7 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
 
   app.post("/patients/:patientId/records/:recordId/anchor-result", clinical, async (req, res, next) => {
     try {
+      if (req.user.role !== "doctor") return res.status(403).json({ error: DOCTOR_ANCHOR });
       const txHash = z.string().trim().regex(/^0x[0-9a-fA-F]{64}$/).parse(req.body?.transaction);
       const patient = await db.getPatient(req.params.patientId, req.user.hospital_id);
       if (!patient) return res.status(404).json({ error: "Patient not found" });
@@ -652,7 +685,8 @@ async function assembleChart({ db, blockchain, key, patient, access }) {
   const rows = typeof db.listMedicalRecordsByPublicId === "function"
     ? await db.listMedicalRecordsByPublicId(patient.patientId, patient.hospital_id || patient.hospitalId)
     : await db.listMedicalRecordsForPatient(patient.id);
-  const records = rows.map((row) => presentClinicalRecord(row, key));
+  const records = rows.map((row) => presentClinicalRecord(row, key))
+    .filter((record) => access === "consent" || record.workflowStatus !== "draft");
   let profile = {};
   if (patient.piiCiphertext) {
     try { profile = decryptJson(patient.piiCiphertext, key); } catch { profile = {}; }
@@ -737,6 +771,12 @@ function reasonForActor(rows, session, wallet, key) {
   }
 }
 
+async function openClinicalAccess({ db, blockchain, userId, patient }) {
+  const wallet = await boundWallet(db, userId);
+  const mode = await clinicalMode(blockchain, patientReference(patient), wallet);
+  return mode;
+}
+
 module.exports = {
   registerClinicalRecords,
   recordContentHash,
@@ -747,5 +787,10 @@ module.exports = {
   CATEGORIES,
   clinicalWalletMessage,
   assembleChart,
-  sendSummaryPdf
+  sendSummaryPdf,
+  openClinicalAccess,
+  noteClinicalAudit,
+  DOCTOR_ONLY,
+  DOCTOR_ANCHOR,
+  CORRECTION_REASON
 };

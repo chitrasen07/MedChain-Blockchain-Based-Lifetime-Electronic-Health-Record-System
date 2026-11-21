@@ -442,8 +442,8 @@ function createDb(config) {
     },
     async createMedicalRecord(input) {
       const result = await query(
-        "INSERT INTO medical_records (patient_id,hospital_id,category,version_index,prior_record_id,record_ref,content_ciphertext,content_hash,recorded_on,chain_status,created_by) SELECT id,$2,$3,$4,$5,$6,$7,$8,$9,'consent_required',$10 FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed' RETURNING id,category,version_index AS \"versionIndex\",prior_record_id AS \"priorRecordId\",record_ref AS \"recordRef\",content_hash AS \"contentHash\",recorded_on AS \"recordedOn\",chain_status AS \"chainStatus\",tx_hash AS \"txHash\"",
-        [input.publicPatientId, input.hospitalId, input.category, input.versionIndex, input.priorRecordId, input.recordRef, input.contentCiphertext, input.contentHash, input.recordedOn, input.actorId]
+        "INSERT INTO medical_records (patient_id,hospital_id,category,version_index,prior_record_id,record_ref,content_ciphertext,content_hash,recorded_on,chain_status,created_by,correction_reason_ciphertext,workflow_status) SELECT id,$2,$3,$4,$5,$6,$7,$8,$9,'consent_required',$10,$11,$12 FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed' RETURNING id,category,version_index AS \"versionIndex\",prior_record_id AS \"priorRecordId\",record_ref AS \"recordRef\",content_hash AS \"contentHash\",recorded_on AS \"recordedOn\",chain_status AS \"chainStatus\",workflow_status AS \"workflowStatus\",tx_hash AS \"txHash\"",
+        [input.publicPatientId, input.hospitalId, input.category, input.versionIndex, input.priorRecordId, input.recordRef, input.contentCiphertext, input.contentHash, input.recordedOn, input.actorId, input.correctionReasonCiphertext || null, input.workflowStatus || "reviewed"]
       );
       if (!result.rowCount) {
         const error = new Error("Patient not found");
@@ -461,21 +461,21 @@ function createDb(config) {
     },
     async getMedicalRecord(id, hospitalId) {
       const result = await query(
-        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",p.patient_id AS \"publicPatientId\" FROM medical_records m JOIN patients p ON p.id=m.patient_id WHERE m.id=$1 AND m.hospital_id=$2",
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.workflow_status AS \"workflowStatus\",m.correction_reason_ciphertext AS \"correctionReasonCiphertext\",m.tx_hash AS \"txHash\",p.patient_id AS \"publicPatientId\" FROM medical_records m JOIN patients p ON p.id=m.patient_id WHERE m.id=$1 AND m.hospital_id=$2",
         [id, hospitalId]
       );
       return result.rows[0] || null;
     },
     async listMedicalRecordsByPublicId(publicPatientId, hospitalId) {
       const result = await query(
-        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",m.created_at AS \"createdAt\",u.full_name AS \"authorName\" FROM medical_records m JOIN patients p ON p.id=m.patient_id LEFT JOIN users u ON u.id=m.created_by WHERE p.patient_id=$1 AND m.hospital_id=$2 AND p.status='confirmed' ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.workflow_status AS \"workflowStatus\",m.correction_reason_ciphertext AS \"correctionReasonCiphertext\",m.tx_hash AS \"txHash\",m.created_at AS \"createdAt\",u.full_name AS \"authorName\" FROM medical_records m JOIN patients p ON p.id=m.patient_id LEFT JOIN users u ON u.id=m.created_by WHERE p.patient_id=$1 AND m.hospital_id=$2 AND p.status='confirmed' ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
         [publicPatientId, hospitalId]
       );
       return result.rows;
     },
     async listMedicalRecordsForPatient(patientId) {
       const result = await query(
-        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",m.created_at AS \"createdAt\",u.full_name AS \"authorName\" FROM medical_records m LEFT JOIN users u ON u.id=m.created_by WHERE m.patient_id=$1 ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
+        "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.workflow_status AS \"workflowStatus\",m.correction_reason_ciphertext AS \"correctionReasonCiphertext\",m.tx_hash AS \"txHash\",m.created_at AS \"createdAt\",u.full_name AS \"authorName\" FROM medical_records m LEFT JOIN users u ON u.id=m.created_by WHERE m.patient_id=$1 ORDER BY m.recorded_on ASC, m.created_at ASC, m.version_index ASC",
         [patientId]
       );
       return result.rows;
@@ -561,6 +561,53 @@ function createDb(config) {
       const result = await query(
         "SELECT e.action, e.actor_role AS \"actorRole\", e.category, e.version_index AS \"versionIndex\", e.tx_hash AS \"txHash\", e.created_at AS \"createdAt\", u.full_name AS \"authorName\" FROM clinical_audit_events e JOIN patients p ON p.id=e.patient_id LEFT JOIN users u ON u.id=e.actor_id WHERE p.patient_id=$1 AND e.hospital_id=$2 ORDER BY e.created_at ASC",
         [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
+    async createNursingIntake(input) {
+      const result = await query(
+        "INSERT INTO nursing_intake (patient_id,hospital_id,kind,status,content_ciphertext,content_hash,created_by) SELECT id,$2,$3,'pending_review',$4,$5,$6 FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed' RETURNING id, kind, status, content_hash AS \"contentHash\", created_at AS \"createdAt\"",
+        [input.publicPatientId, input.hospitalId, input.kind, input.contentCiphertext, input.contentHash, input.actorId]
+      );
+      if (!result.rowCount) {
+        const error = new Error("Patient not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      return result.rows[0];
+    },
+    async listNursingIntake(publicPatientId, hospitalId) {
+      const result = await query(
+        "SELECT n.id, n.kind, n.status, n.content_ciphertext AS \"contentCiphertext\", n.content_hash AS \"contentHash\", n.review_note_ciphertext AS \"reviewNoteCiphertext\", n.reviewed_at AS \"reviewedAt\", n.promoted_record_id AS \"promotedRecordId\", n.created_at AS \"createdAt\", u.full_name AS \"authorName\", p.patient_id AS \"patientId\" FROM nursing_intake n JOIN patients p ON p.id = n.patient_id LEFT JOIN users u ON u.id = n.created_by WHERE p.patient_id = $1 AND n.hospital_id = $2 AND p.status = 'confirmed' ORDER BY n.created_at ASC",
+        [publicPatientId, hospitalId]
+      );
+      return result.rows;
+    },
+    async getNursingIntake(id, hospitalId) {
+      const result = await query(
+        "SELECT n.id, n.kind, n.status, n.content_ciphertext AS \"contentCiphertext\", n.content_hash AS \"contentHash\", n.review_note_ciphertext AS \"reviewNoteCiphertext\", n.reviewed_at AS \"reviewedAt\", n.promoted_record_id AS \"promotedRecordId\", n.created_at AS \"createdAt\", p.patient_id AS \"patientId\" FROM nursing_intake n JOIN patients p ON p.id = n.patient_id WHERE n.id = $1 AND n.hospital_id = $2",
+        [id, hospitalId]
+      );
+      return result.rows[0] || null;
+    },
+    async reviewNursingIntake(input) {
+      const result = await query(
+        "UPDATE nursing_intake SET status = $3, review_note_ciphertext = $4, reviewed_by = $5, reviewed_at = now(), promoted_record_id = $6 WHERE id = $1 AND hospital_id = $2 AND status = 'pending_review' RETURNING id, status, promoted_record_id AS \"promotedRecordId\"",
+        [input.id, input.hospitalId, input.status, input.reviewNoteCiphertext || null, input.reviewerId, input.promotedRecordId || null]
+      );
+      return result.rows[0] || null;
+    },
+    async listNursingQueue(hospitalId) {
+      const result = await query(
+        "SELECT n.id, n.kind, n.status, n.created_at AS \"createdAt\", p.patient_id AS \"patientId\" FROM nursing_intake n JOIN patients p ON p.id = n.patient_id WHERE n.hospital_id = $1 AND n.status = 'pending_review' ORDER BY n.created_at DESC LIMIT 30",
+        [hospitalId]
+      );
+      return result.rows;
+    },
+    async listRecentPatients(hospitalId) {
+      const result = await query(
+        "SELECT patient_id AS \"patientId\", status, created_at AS \"createdAt\" FROM patients WHERE hospital_id = $1 AND status = 'confirmed' ORDER BY created_at DESC LIMIT 8",
+        [hospitalId]
       );
       return result.rows;
     },

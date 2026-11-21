@@ -8,6 +8,7 @@ const { encryptJson, decryptJson, fieldHash } = require("./crypto");
 const { issueToken, requireAuth } = require("./auth");
 const { registerPatientAuth } = require("./patientAuth");
 const { registerClinicalRecords } = require("./clinicalRecords");
+const { registerNursing } = require("./nursing");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
 const {
@@ -175,6 +176,11 @@ function createApp({ db, blockchain, config }) {
     ["administrator"],
     { loadUser: db.getUserForAuth }
   );
+  const registrar = requireAuth(
+    config.jwtSecret,
+    ["administrator", "hospital_staff"],
+    { loadUser: db.getUserForAuth }
+  );
   const reviewer = requireAuth(
     config.jwtSecret,
     ["reviewer", "administrator"],
@@ -218,7 +224,7 @@ function createApp({ db, blockchain, config }) {
     } catch (error) { next(error); }
   });
 
-  app.post("/patients", admin, async (req, res, next) => {
+  app.post("/patients", registrar, async (req, res, next) => {
     try {
       const profile = profileSchema.parse(req.body);
       const reviewCaseId = req.body.reviewCaseId
@@ -582,6 +588,7 @@ function createApp({ db, blockchain, config }) {
 
   registerPatientAuth(app, { db, blockchain, config, authRateLimit: patientAuthRateLimit() });
   registerClinicalRecords(app, { db, blockchain, config, authRateLimit });
+  registerNursing(app, { db, blockchain, config });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {

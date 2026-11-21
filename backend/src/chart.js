@@ -6,6 +6,7 @@ const VITALS = [
   ["heartRate", "Heart rate", "bpm"],
   ["temperature", "Temperature", "C"],
   ["spo2", "SpO2", "%"],
+  ["respiratoryRate", "Respiratory rate", "breaths/min"],
   ["weight", "Weight", "kg"],
   ["height", "Height", "cm"],
   ["bloodGlucose", "Blood glucose", "mg/dL"]
@@ -17,6 +18,10 @@ const AUDIT_LABELS = {
   record_corrected: "Record corrected",
   record_anchored: "Record anchored",
   summary_exported: "Summary exported",
+  intake_created: "Nursing intake recorded",
+  intake_viewed: "Nursing intake viewed",
+  intake_reviewed: "Nursing intake reviewed",
+  intake_rejected: "Nursing intake rejected",
   ACCESS_GRANTED: "Consent granted",
   ACCESS_REVOKED: "Consent revoked",
   ACCESS_EXPIRED: "Consent expired",
@@ -55,6 +60,14 @@ function anchorStatus(record) {
   return "Not anchored";
 }
 
+function reportStatus(record) {
+  if (record?.chainStatus === "anchored") return "Anchored";
+  if (record?.chainStatus === "failed" || record?.chainStatus === "mismatch") return "Failed";
+  if (record?.workflowStatus === "draft") return "Draft";
+  if (record?.workflowStatus === "pending_review") return "Pending Review";
+  return "Reviewed";
+}
+
 function etherscanUrl(record) {
   if (anchorStatus(record) !== "Anchored") return null;
   return /^0x[0-9a-fA-F]{64}$/.test(record.transaction || "")
@@ -68,6 +81,10 @@ function verification(record) {
     storage: "Encrypted",
     contentHash: record.contentHash || MISSING,
     anchorStatus: anchorStatus(record),
+    reportStatus: reportStatus(record),
+    author: record.authorName || null,
+    createdAt: record.createdAt || null,
+    correctionReason: record.correctionReason || null,
     transaction: record.transaction || null,
     etherscanUrl: etherscanUrl(record)
   };
@@ -345,7 +362,10 @@ function buildPatientChart({
           version: Number(record.versionIndex) || 0,
           recordedOn: record.recordedOn,
           author: record.authorName || MISSING,
+          createdAt: record.createdAt || null,
+          correctionReason: record.correctionReason || null,
           anchorStatus: anchorStatus(record),
+          reportStatus: reportStatus(record),
           transaction: record.transaction || null,
           etherscanUrl: etherscanUrl(record),
           storage: "Encrypted"
@@ -431,6 +451,7 @@ module.exports = {
   VITALS,
   ageYears,
   anchorStatus,
+  reportStatus,
   allergyAlerts,
   buildPatientChart,
   emergencyCard,

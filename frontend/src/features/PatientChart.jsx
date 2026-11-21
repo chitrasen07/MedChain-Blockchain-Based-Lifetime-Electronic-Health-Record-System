@@ -43,7 +43,9 @@ function Verification({ record }) {
   const label = anchorLabel(record);
   return (
     <div className="mt-2 space-y-1 text-xs text-muted">
-      <p>Version {record.version ?? record.versionIndex ?? 0} · {record.storage || "Encrypted"} · {label}</p>
+      <p>Version {record.version ?? record.versionIndex ?? 0} · {record.storage || "Encrypted"} · {record.reportStatus || label}</p>
+      {record.author ? <p>{record.author}{record.createdAt ? ` · ${new Date(record.createdAt).toLocaleString()}` : ""}</p> : null}
+      {record.correctionReason ? <p>Correction: {record.correctionReason}</p> : null}
       <p className="break-all">{record.contentHash || "Not recorded"}</p>
       {record.etherscanUrl ? (
         <a className="break-all text-teal" href={record.etherscanUrl} target="_blank" rel="noreferrer">{record.transaction}</a>
@@ -301,7 +303,7 @@ export function PatientChart({ chart, patientId, readOnly = false, onReload }) {
             <div key={group.recordRef} className="mt-3">
               <p className="text-sm capitalize text-ink">{group.category}</p>
               {group.versions.map((version) => (
-                <p key={version.id} className="text-xs text-muted">Version {version.version} · {version.recordedOn} · {version.author} · {version.anchorStatus} · {version.storage}</p>
+                <p key={version.id} className="text-xs text-muted">Version {version.version} · {version.recordedOn} · {version.author}{version.createdAt ? ` · ${new Date(version.createdAt).toLocaleString()}` : ""} · {version.reportStatus || version.anchorStatus} · {version.storage}{version.correctionReason ? ` · Correction: ${version.correctionReason}` : ""}</p>
               ))}
             </div>
           )) : null}

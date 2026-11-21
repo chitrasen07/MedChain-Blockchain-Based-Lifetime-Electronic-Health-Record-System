@@ -49,6 +49,8 @@ export const CLINICAL_FIELDS = {
     ["temperatureUnit", "Temperature unit", false],
     ["spo2", "SpO2", false],
     ["spo2Unit", "SpO2 unit", false],
+    ["respiratoryRate", "Respiratory rate", false],
+    ["respiratoryRateUnit", "Respiratory rate unit", false],
     ["weight", "Weight", false],
     ["weightUnit", "Weight unit", false],
     ["height", "Height", false],
@@ -70,6 +72,8 @@ export function clinicalRequestBody(form) {
     fields,
   };
   if (form.priorRecordId) body.priorRecordId = form.priorRecordId;
+  if (form.correctionReason?.trim()) body.correctionReason = form.correctionReason.trim();
+  if (form.workflowStatus === "draft") body.workflowStatus = "draft";
   return body;
 }
 

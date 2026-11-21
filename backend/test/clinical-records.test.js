@@ -211,10 +211,26 @@ test("consented clinical staff store an encrypted record and cannot broadcast th
       category: "allergy",
       recordedOn: "2026-05-01",
       fields: { substance: "Penicillin", reaction: "Resolved" },
-      priorRecordId: created.body.id
+      priorRecordId: created.body.id,
+      correctionReason: "Reaction resolved"
     });
-  assert.equal(appended.status, 201);
-  assert.equal(appended.body.versionIndex, 1);
+  assert.equal(appended.status, 403);
+  assert.equal(appended.body.error, "Only a doctor can create or correct this report.");
+  assert.equal(rows.length, 1);
+  const corrected = await request(app)
+    .post("/patients/PATIENT-000001/records")
+    .set("Authorization", `Bearer ${token(doctor)}`)
+    .send({
+      category: "allergy",
+      recordedOn: "2026-05-01",
+      fields: { substance: "Penicillin", reaction: "Resolved" },
+      priorRecordId: created.body.id,
+      correctionReason: "Reaction resolved"
+    });
+  assert.equal(corrected.status, 201);
+  assert.equal(corrected.body.versionIndex, 1);
+  assert.equal(corrected.body.correctionReason, "Reaction resolved");
+  assert.equal(rows[0].contentCiphertext.includes("Resolved"), false);
   const anchor = await request(app)
     .post(`/patients/PATIENT-000001/records/${created.body.id}/anchor`)
     .set("Authorization", `Bearer ${token(doctor)}`);

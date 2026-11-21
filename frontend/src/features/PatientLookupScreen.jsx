@@ -9,6 +9,7 @@ import { ApiError, apiClient, messageForRequest } from "../lib/api";
 import { pageChrome } from "../lib/pageChrome";
 import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
 import { clinicalService } from "../services/clinicalService";
+import { nursingService } from "../services/nursingService";
 import { patientService } from "../services/patientService";
 
 function formatTimestamp(value) {
@@ -17,16 +18,17 @@ function formatTimestamp(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
-export function PatientLookupScreen({ pageKey, chart = false }) {
+export function PatientLookupScreen({ pageKey, chart = false, intake = false }) {
   const { page, crumbs } = pageChrome(pageKey);
   const [params] = useSearchParams();
   const scannedId = (params.get("patientId") || "").trim().toUpperCase();
   const [patientId, setPatientId] = useState(scannedId);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [loading, setLoading] = useState(chart && /^PATIENT-[0-9]{1,12}$/.test(scannedId));
+  const [loading, setLoading] = useState((chart || intake) && /^PATIENT-[0-9]{1,12}$/.test(scannedId));
   const [patient, setPatient] = useState(null);
   const [record, setRecord] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [walletAddress, setWalletAddress] = useState("");
 
   useEffect(() => {
@@ -35,22 +37,25 @@ export function PatientLookupScreen({ pageKey, chart = false }) {
 
   useEffect(() => {
     const id = (params.get("patientId") || "").trim().toUpperCase();
-    if (!chart || !/^PATIENT-[0-9]{1,12}$/.test(id)) return undefined;
+    if ((!chart && !intake) || !/^PATIENT-[0-9]{1,12}$/.test(id)) return undefined;
     let active = true;
     patientService.get(id).then(async (found) => {
       if (!active) return;
       setPatientId(id);
       setPatient(found);
       try {
-        setRecord(await apiClient.request(`/patients/${encodeURIComponent(id)}/chart`));
+        if (intake) setSummary(await nursingService.summary(id));
+        if (chart) setRecord(await apiClient.request(`/patients/${encodeURIComponent(id)}/chart`));
       } catch (requestError) {
-        setRecord(null);
+        if (chart) setRecord(null);
+        if (intake) setSummary(null);
         setNotice(requestError instanceof ApiError ? messageForRequest(requestError) : "The chart could not be opened.");
       }
     }).catch((requestError) => {
       if (!active) return;
       setPatient(null);
       setRecord(null);
+      setSummary(null);
       setNotice(requestError instanceof ApiError && requestError.status === 404
         ? "No confirmed patient with that ID was found in this hospital."
         : "The hospital service could not complete the request.");
@@ -60,7 +65,7 @@ export function PatientLookupScreen({ pageKey, chart = false }) {
     return () => {
       active = false;
     };
-  }, [chart, params]); // Prefills a scanned patient ID. The chart request still requires authorization.
+  }, [chart, intake, params]); // Prefills a scanned patient ID. The chart request still requires authorization.
 
   async function connectWallet() {
     setNotice("");
@@ -76,6 +81,12 @@ export function PatientLookupScreen({ pageKey, chart = false }) {
   }
 
   async function loadChart(id) {
+    if (intake) {
+      try { setSummary(await nursingService.summary(id)); } catch (requestError) {
+        setSummary(null);
+        setNotice(requestError instanceof ApiError ? messageForRequest(requestError) : "The patient summary could not be opened.");
+      }
+    }
     if (!chart) {
       setRecord(null);
       return;
@@ -105,6 +116,7 @@ export function PatientLookupScreen({ pageKey, chart = false }) {
     } catch (requestError) {
       setPatient(null);
       setRecord(null);
+      setSummary(null);
       setNotice(
         requestError instanceof ApiError && requestError.status === 404
           ? "No confirmed patient with that ID was found in this hospital."
@@ -151,7 +163,46 @@ export function PatientLookupScreen({ pageKey, chart = false }) {
           </dl>
         </Card>
       ) : null}
+      {summary ? <StaffSummary summary={summary} /> : null}
       {record ? <PatientChart chart={record} patientId={patient.patientId} onReload={() => loadChart(patient.patientId)} /> : null}
     </div>
   );
+}
+
+function StaffSummary({ summary }) {
+  const demographics = summary.demographics || {};
+  return (
+    <Card className="mt-4" title="Permitted details" description="Name and date of birth come from the hospital registration. Visit notes, vitals, and laboratory intake are the nursing submissions for this hospital. Doctor diagnoses are not included.">
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+        <div><dt className="text-muted">Name</dt><dd className="mt-1 text-ink">{demographics.fullName || "Not recorded"}</dd></div>
+        <div><dt className="text-muted">Date of birth</dt><dd className="mt-1 text-ink">{demographics.dateOfBirth || "Not recorded"}</dd></div>
+        <div><dt className="text-muted">Gender</dt><dd className="mt-1 text-ink">{demographics.gender || "Not recorded"}</dd></div>
+        <div><dt className="text-muted">Blood group</dt><dd className="mt-1 text-ink">{demographics.bloodGroup || "Not recorded"}</dd></div>
+      </dl>
+      <IntakeList title="Visit notes" items={summary.visits} />
+      <IntakeList title="Vital signs" items={summary.vitals} />
+      <IntakeList title="Laboratory reports" items={summary.labs} />
+    </Card>
+  );
+}
+
+function IntakeList({ title, items }) {
+  return (
+    <div className="mt-4">
+      <h3 className="text-sm font-semibold text-navy">{title}</h3>
+      {items?.length ? items.map((item) => (
+        <p key={item.id} className="mt-2 text-sm text-ink">
+          <span className="font-medium">{item.label}</span>
+          <span className="mt-1 block text-ink">{line(item)}</span>
+        </p>
+      )) : <p className="mt-1 text-sm text-muted">None recorded.</p>}
+    </div>
+  );
+}
+
+function line(item) {
+  const content = item.content || {};
+  if (item.kind === "visit_note") return [content.checkInAt, content.reason, content.symptoms, content.observations].filter(Boolean).join(" · ");
+  if (item.kind === "laboratory") return [content.testName, content.result, content.unit].filter(Boolean).join(" · ");
+  return ["bloodPressure", "heartRate", "temperature", "spo2", "respiratoryRate", "height", "weight"].filter((name) => content[name]).map((name) => content[name]).join(" · ") || "Measurement stored.";
 }
