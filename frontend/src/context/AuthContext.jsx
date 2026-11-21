@@ -60,7 +60,7 @@ export function AuthProvider({ children }) {
         const signature = await signMessage(challenge.message);
         const payload = await apiClient.request("/patient-auth/token", {
           method: "POST",
-          body: { nonce: challenge.nonce, signature },
+          body: { nonce: challenge.nonce, signature, patientId },
           authenticated: false,
         });
         const session = readPatientSession(payload?.token);

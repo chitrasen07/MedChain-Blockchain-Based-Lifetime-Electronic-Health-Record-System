@@ -36,12 +36,9 @@ test("the demo rate-limit flag is enabled only by the exact true value", () => {
   assert.equal(createRuntime({ ...baseEnv, DEMO_DISABLE_RATE_LIMIT: "yes" }).demoDisableRateLimit, false);
 });
 
-test("demo mode skips patient login, wallet challenges, and recovery checks", async () => {
+test("demo mode skips staff wallet challenges and leaves patient sign-in limited", async () => {
   const app = appFor(true);
   const paths = [
-    "/patient-auth/challenge",
-    "/patient-auth/token",
-    "/patient-auth/claim-status",
     "/clinical-wallet/challenge",
     "/clinical-wallet/session",
     "/patient-registration/wallet-challenge",
@@ -51,6 +48,8 @@ test("demo mode skips patient login, wallet challenges, and recovery checks", as
     const results = await statuses(app, path, 12);
     assert.equal(results.includes(429), false, path);
   }
+  const patient = await statuses(app, "/patient-auth/challenge", 9);
+  assert.equal(patient.at(-1), 429);
 });
 
 test("patient login stays limited when the demo flag is off", async () => {

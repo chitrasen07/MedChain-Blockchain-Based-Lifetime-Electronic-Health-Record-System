@@ -59,14 +59,58 @@ function ownershipFromRegistration(registration, fallback) {
 }
 
 const DEMO_RATE_LIMIT_PATHS = new Set([
-  "/patient-auth/challenge",
-  "/patient-auth/token",
-  "/patient-auth/claim-status",
   "/clinical-wallet/challenge",
   "/clinical-wallet/session",
   "/patient-registration/wallet-challenge",
   "/admin/staff-wallet/challenge"
 ]);
+const PATIENT_AUTH_WINDOW_MS = 15 * 60 * 1000;
+const PATIENT_AUTH_LIMIT = 8;
+const PATIENT_AUTH_IP_LIMIT = 30;
+
+function waitLabel(seconds) {
+  const value = Math.max(1, Math.ceil(Number(seconds) || 1));
+  if (value >= 120) return `${Math.ceil(value / 60)} minutes`;
+  if (value >= 60) return "1 minute";
+  return value === 1 ? "1 second" : `${value} seconds`;
+}
+
+function patientSubject(body) {
+  const patientId = typeof body?.patientId === "string" ? body.patientId.trim().toUpperCase() : "";
+  if (/^PATIENT-[0-9]{1,12}$/.test(patientId)) return patientId;
+  const wallet = typeof body?.walletAddress === "string" ? body.walletAddress.trim().toLowerCase() : "";
+  if (/^0x[0-9a-f]{40}$/.test(wallet)) return wallet;
+  return "unknown";
+}
+
+function patientAuthLimiter({ limit, keyGenerator }) {
+  return rateLimit({
+    windowMs: PATIENT_AUTH_WINDOW_MS,
+    limit,
+    standardHeaders: true,
+    skipSuccessfulRequests: true,
+    keyGenerator,
+    handler(_req, res) {
+      const retryAfterSeconds = Number(res.getHeader("Retry-After")) || Math.ceil(PATIENT_AUTH_WINDOW_MS / 1000);
+      res.status(429).json({
+        error: `Too many sign-in attempts for this patient. Wait ${waitLabel(retryAfterSeconds)} and try again.`,
+        retryAfterSeconds
+      });
+    }
+  });
+}
+
+function patientAuthRateLimit() {
+  const byPatient = patientAuthLimiter({
+    limit: PATIENT_AUTH_LIMIT,
+    keyGenerator: (req) => `${req.ip}:${patientSubject(req.body)}`
+  });
+  const byAddress = patientAuthLimiter({
+    limit: PATIENT_AUTH_IP_LIMIT,
+    keyGenerator: (req) => req.ip
+  });
+  return (req, res, next) => byAddress(req, res, (error) => error ? next(error) : byPatient(req, res, next));
+}
 
 function skipDemoRateLimit(config) {
   return (req) => Boolean(config.demoDisableRateLimit) && DEMO_RATE_LIMIT_PATHS.has(req.path);
@@ -74,6 +118,7 @@ function skipDemoRateLimit(config) {
 
 function createApp({ db, blockchain, config }) {
   const app = express();
+  app.set("trust proxy", config.trustProxy === 1 ? 1 : false);
   app.use(helmet());
   app.use(cors({ origin: config.corsOrigin }));
   app.use(express.json({ limit: "32kb" }));
@@ -533,7 +578,7 @@ function createApp({ db, blockchain, config }) {
     } catch (error) { next(error); }
   });
 
-  registerPatientAuth(app, { db, blockchain, config, authRateLimit });
+  registerPatientAuth(app, { db, blockchain, config, authRateLimit: patientAuthRateLimit() });
   registerClinicalRecords(app, { db, blockchain, config, authRateLimit });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {

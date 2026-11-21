@@ -31,8 +31,19 @@ function createRuntime(env) {
     privateKey: blockchainEnabled ? env.BLOCKCHAIN_PRIVATE_KEY : undefined,
     thirdwebSecretKey: blockchainEnabled ? env.THIRDWEB_SECRET_KEY : undefined,
     corsOrigin: env.CORS_ORIGIN || false,
-    demoDisableRateLimit: String(env.DEMO_DISABLE_RATE_LIMIT || "").trim().toLowerCase() === "true"
+    demoDisableRateLimit: String(env.DEMO_DISABLE_RATE_LIMIT || "").trim().toLowerCase() === "true",
+    trustProxy: readTrustProxy(env)
   };
+}
+
+// One trusted hop is Render's proxy. true would let a client choose the address.
+function readTrustProxy(env) {
+  const value = String(env.TRUST_PROXY ?? "").trim().toLowerCase();
+  if (value === "0" || value === "false") return false;
+  if (value === "1") return 1;
+  if (String(env.NODE_ENV || "").trim() === "production") return 1;
+  if (String(env.RENDER || "").trim().toLowerCase() === "true") return 1;
+  return false;
 }
 
 if (require.main === module) {
@@ -41,4 +52,4 @@ if (require.main === module) {
   app.listen(config.port, () => console.log(`MedChain backend listening on ${config.port}`));
 }
 
-module.exports = { createRuntime, readBlockchainEnabled };
+module.exports = { createRuntime, readBlockchainEnabled, readTrustProxy };

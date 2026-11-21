@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { BrandLockup } from "../../components/BrandMark";
 import { Button } from "../../components/Button";
@@ -8,7 +8,7 @@ import { ApiError } from "../../lib/api";
 import { connectPatientWallet, signPatientLogin } from "../../lib/patientWallet";
 import { OwnershipClaimPanel } from "../../features/OwnershipClaimPanel";
 import { homeForRole } from "../../lib/roles";
-import { patientAuthMessage } from "../../services/patientPortal";
+import { patientAuthMessage, patientRetryLabel } from "../../services/patientPortal";
 
 const patientIdPattern = /^PATIENT-[0-9]{1,12}$/;
 
@@ -19,10 +19,20 @@ export function PatientLoginPage() {
   const [walletAddress, setWalletAddress] = useState("");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const [clock, setClock] = useState(() => Date.now());
+  const signInLock = useRef(false);
+  const remaining = Math.max(0, Math.ceil((retryAt - clock) / 1000));
 
   useEffect(() => {
     document.title = "Patient login · MedChain";
   }, []);
+
+  useEffect(() => {
+    if (remaining <= 0) return undefined;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [remaining]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
@@ -40,6 +50,7 @@ export function PatientLoginPage() {
 
   async function handleSignIn(event) {
     event.preventDefault();
+    if (signInLock.current || remaining > 0) return;
     setNotice("");
     const id = patientId.trim().toUpperCase();
     if (!patientIdPattern.test(id)) {
@@ -50,6 +61,7 @@ export function PatientLoginPage() {
       setNotice("Connect the wallet that controls this record.");
       return;
     }
+    signInLock.current = true;
     setSubmitting(true);
     try {
       await loginPatient({
@@ -58,8 +70,17 @@ export function PatientLoginPage() {
         signMessage: (message) => signPatientLogin(message, walletAddress),
       });
     } catch (error) {
-      setNotice(patientAuthMessage(error instanceof ApiError ? error : error));
+      const failure = error instanceof ApiError ? error : error;
+      const seconds = Number(failure?.retryAfterSeconds);
+      if (failure?.status === 429 && Number.isInteger(seconds) && seconds > 0) {
+        setRetryAt(Date.now() + seconds * 1000);
+        setClock(Date.now());
+        setNotice("");
+      } else {
+        setNotice(patientAuthMessage(failure));
+      }
     } finally {
+      signInLock.current = false;
       setSubmitting(false);
     }
   }
@@ -114,12 +135,16 @@ export function PatientLoginPage() {
                     Connect wallet
                   </Button>
                 </div>
-                {notice ? (
+                {remaining > 0 ? (
+                  <p role="alert" className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">
+                    Too many sign-in attempts for this patient. Wait {patientRetryLabel(remaining)} and try again.
+                  </p>
+                ) : notice ? (
                   <p role="alert" className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">
                     {notice}
                   </p>
                 ) : null}
-                <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
+                <Button type="submit" className="w-full" loading={submitting} disabled={submitting || remaining > 0}>
                   Sign in
                 </Button>
               </div>

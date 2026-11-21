@@ -23,6 +23,14 @@ export function messageForAuthFailure(error) {
   return FAILURE_MESSAGES[error?.code] ?? FAILURE_MESSAGES.server;
 }
 
+function readRetryAfter(response, payload) {
+  const fromBody = Number(payload?.retryAfterSeconds);
+  if (Number.isInteger(fromBody) && fromBody > 0) return fromBody;
+  const header = Number(response.headers?.get?.("retry-after"));
+  if (Number.isInteger(header) && header > 0) return header;
+  return 0;
+}
+
 function resolveBase(baseUrl) {
   const value = typeof baseUrl === "function" ? baseUrl() : baseUrl;
   const trimmed = typeof value === "string" ? value.trim().replace(/\/$/, "") : "";
@@ -169,6 +177,8 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       if (response.status === 401 && authenticated) onUnauthorized?.();
       const serverMessage = payload && typeof payload.error === "string" ? payload.error : "";
       const error = errorForStatus(response.status, serverMessage);
+      const retryAfterSeconds = readRetryAfter(response, payload);
+      if (retryAfterSeconds) error.retryAfterSeconds = retryAfterSeconds;
       if (payload && payload.status === "registration_failed") error.resultStatus = payload.status;
       throw error;
     }
