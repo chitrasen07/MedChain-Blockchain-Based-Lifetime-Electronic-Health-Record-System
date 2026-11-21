@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createApiClient, messageForRequest } from "../src/lib/api.js";
 import { createAdminService, validateStaffAccount } from "../src/services/adminService.js";
-import { createPatientService, describeRegistration, validateProfile } from "../src/services/patientService.js";
+import { createPatientService, describeMatch, describeRegistration, registrationReady, validateProfile } from "../src/services/patientService.js";
 import { validateDecision } from "../src/services/reviewService.js";
 import { createVisitService, validateVisit } from "../src/services/visitService.js";
 
@@ -38,7 +38,12 @@ describe("patient and visit requests", () => {
     });
     assert.deepEqual(parsed.errors, {});
     assert.deepEqual(parsed.profile, { fullName: "Synthetic Patient", dateOfBirth: "1990-01-01" });
-    const result = await patients.match(parsed.profile);
+    const result = await patients.match(parsed.profile, "11111111-1111-4111-8111-111111111111");
+    assert.equal(JSON.parse(seen.options.body).reviewCaseId, "11111111-1111-4111-8111-111111111111");
+    assert.equal(registrationReady({ status: "review_authorized" }), true);
+    assert.equal(registrationReady({ status: "review_required" }), false);
+    assert.match(describeMatch({ status: "review_authorized" }), /No new review case/);
+    assert.match(describeMatch({ status: "review_same_person", patientId: "PATIENT-000001" }), /already registered/);
     assert.equal(result.status, "no_match");
     assert.equal(seen.url, "http://127.0.0.1:9/patients/match");
     assert.equal(seen.options.headers.Authorization.startsWith("Bearer "), true);

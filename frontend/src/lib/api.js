@@ -54,6 +54,13 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "Candidate is not part of this review.",
   "Registration attempt is no longer retryable",
   "Registration review is not ready",
+  "This review case is still pending. Registration stays blocked until a reviewer marks the person as different.",
+  "This review linked the profile to an existing patient. A new Patient ID was not created.",
+  "This review was rejected. Registration is not authorized.",
+  "This review case does not match the patient details entered.",
+  "This review case has already been used for a registration.",
+  "That review case was not found.",
+  "A new possible match appeared after this review. Review the new case before registering.",
   "Do not send a recovery secret.",
   "The hospital wallet cannot anchor a medical record. Patient consent is required.",
   "Switch the wallet to Sepolia before anchoring. No transaction was sent.",
@@ -112,7 +119,12 @@ function errorForStatus(status, serverMessage) {
       : FAILURE_MESSAGES.invalid;
     return new ApiError(message, { status, code: "invalid" });
   }
-  if (status === 404) return new ApiError("The requested record was not found.", { status, code: "not_found" });
+  if (status === 404) {
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage)
+      ? serverMessage
+      : "The requested record was not found.";
+    return new ApiError(message, { status, code: "not_found" });
+  }
   if (status === 409) {
     const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage)
       ? serverMessage

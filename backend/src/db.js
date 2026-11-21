@@ -251,6 +251,32 @@ function createDb(config) {
         return review.rows[0];
       });
     },
+    async addReviewCandidates(reviewCaseId, hospitalId, candidateIds) {
+      const result = await query(
+        "UPDATE review_cases SET candidate_patient_ids = (SELECT ARRAY(SELECT DISTINCT id FROM unnest(candidate_patient_ids || $3::uuid[]) AS id)) WHERE id=$1 AND hospital_id=$2 AND case_status='pending' RETURNING id",
+        [reviewCaseId, hospitalId, candidateIds]
+      );
+      return result.rows[0] || null;
+    },
+    async assessReviewAuthorization({ hospitalId, hashes, reviewCaseId = null, candidateIds = [], highConfidenceId = "" }) {
+      const fingerprint = crypto.createHash("sha256").update(JSON.stringify(hashes)).digest("hex");
+      const reviews = await loadReviewAuthorizations(query, hospitalId, { reviewCaseId, fingerprint });
+      if (!reviews.length) return reviewCaseId ? { action: "not_found" } : { action: "create" };
+      const options = { candidateIds, highConfidenceId };
+      if (reviewCaseId) {
+        const review = reviews[0];
+        if (review.request_fingerprint !== fingerprint) return { action: "mismatch" };
+        if (!(await sameIdentityHashes(query, review.newPatientId, hashes))) return { action: "mismatch" };
+        return classifyReview(review, options);
+      }
+      for (const review of reviews) {
+        if (!(await sameIdentityHashes(query, review.newPatientId, hashes))) continue;
+        const decision = classifyReview(review, options);
+        if (decision.action === "authorized") return decision;
+      }
+      const pending = reviews.find((review) => review.case_status === "pending");
+      return classifyReview(pending || reviews[0], options);
+    },
     async confirmPatient(id, chain, actorId, hospitalId) {
       return transaction(async (client) => {
         let publicId = chain.patientId;
@@ -648,4 +674,49 @@ function createDb(config) {
   };
 }
 
-module.exports = { createDb, poolConfig };
+function classifyReview(review, { candidateIds = [], highConfidenceId = "" } = {}) {
+  const candidates = new Set(review.candidateIds || []);
+  const base = { reviewCaseId: review.id, newPatientId: review.newPatientId || null };
+  if (review.case_status === "pending") {
+    const novel = candidateIds.filter((id) => !candidates.has(id));
+    return novel.length ? { ...base, action: "add_candidates" } : { ...base, action: "pending" };
+  }
+  if (review.case_status === "rejected") return { ...base, action: "rejected" };
+  if (review.case_status === "resolved_same") {
+    return { ...base, action: "same_person", patientId: review.linkedPublicId || null };
+  }
+  if (review.case_status === "resolved_different" && review.patientStatus === "pending") {
+    if (highConfidenceId && !candidates.has(highConfidenceId)) return { action: "existing" };
+    const novel = candidateIds.filter((id) => !candidates.has(id));
+    if (novel.length) return { ...base, action: "new_candidates" };
+    return { ...base, action: "authorized" };
+  }
+  if (review.case_status === "resolved_different") {
+    return { ...base, action: "used", patientId: review.publicPatientId || null };
+  }
+  return { ...base, action: "used", patientId: review.publicPatientId || null };
+}
+
+async function sameIdentityHashes(query, patientId, hashes) {
+  const stored = await query(
+    "SELECT field_name AS \"fieldName\", field_hash AS \"fieldHash\" FROM patient_identity_hashes WHERE patient_id=$1",
+    [patientId]
+  );
+  const requested = hashes.map(([field, hash]) => `${field}:${hash}`).sort().join("|");
+  const recorded = stored.rows.map((row) => `${row.fieldName}:${row.fieldHash}`).sort().join("|");
+  return requested === recorded;
+}
+
+async function loadReviewAuthorizations(query, hospitalId, { reviewCaseId, fingerprint }) {
+  const columns = `rc.id, rc.case_status, rc.request_fingerprint, rc.candidate_patient_ids AS "candidateIds", rc.new_patient_id AS "newPatientId", p.status AS "patientStatus", p.patient_id AS "publicPatientId", linked.patient_id AS "linkedPublicId"`;
+  const joins = "FROM review_cases rc JOIN patients p ON p.id = rc.new_patient_id LEFT JOIN patients linked ON linked.id = rc.linked_patient_id";
+  const result = reviewCaseId
+    ? await query(`SELECT ${columns} ${joins} WHERE rc.id=$1 AND rc.hospital_id=$2`, [reviewCaseId, hospitalId])
+    : await query(
+      `SELECT ${columns} ${joins} WHERE rc.hospital_id=$1 AND rc.request_fingerprint=$2 ORDER BY rc.created_at DESC LIMIT 20`,
+      [hospitalId, fingerprint]
+    );
+  return result.rows;
+}
+
+module.exports = { createDb, poolConfig, classifyReview };

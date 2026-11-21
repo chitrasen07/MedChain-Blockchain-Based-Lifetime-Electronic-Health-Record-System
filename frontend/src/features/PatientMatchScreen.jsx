@@ -8,7 +8,7 @@ import { ApiError, messageForRequest } from "../lib/api";
 import { claimCommitmentForRecoveryCode, createRecoveryCode, sepoliaTransactionUrl } from "../lib/ownership";
 import { connectPatientWallet, ensurePatientSepolia, signPatientLogin } from "../lib/patientWallet";
 import { pageChrome } from "../lib/pageChrome";
-import { describeMatch, describeRegistration, emptyProfile, patientService, validateOwnership, validateProfile } from "../services/patientService";
+import { clearRegistrationDraft, describeMatch, describeRegistration, emptyProfile, loadRegistrationDraft, patientService, registrationReady, saveRegistrationDraft, validateOwnership, validateProfile } from "../services/patientService";
 
 function requestMessage(error) {
   return error instanceof ApiError ? messageForRequest(error) : "The hospital service could not complete the request.";
@@ -59,7 +59,7 @@ function downloadRecoveryCode(recoveryCode) {
 
 export function PatientMatchScreen({ pageKey, canRegister = false }) {
   const { page, crumbs } = pageChrome(pageKey);
-  const [profile, setProfile] = useState(emptyProfile);
+  const [profile, setProfile] = useState(() => loadRegistrationDraft() || emptyProfile());
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
@@ -77,6 +77,10 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
   }, [page.title]);
+
+  useEffect(() => {
+    saveRegistrationDraft(profile);
+  }, [profile]);
 
   function change(field, value) {
     setProfile((current) => ({ ...current, [field]: value }));
@@ -96,7 +100,11 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     setNotice("");
     setRegistration(null);
     try {
-      setMatch(await patientService.match(parsed.profile));
+      const result = await patientService.match(parsed.profile, parsed.reviewCaseId);
+      setMatch(result);
+      if (result?.reviewCaseId && (result.status === "review_authorized" || result.status === "review_required")) {
+        setProfile((current) => ({ ...current, reviewCaseId: result.reviewCaseId }));
+      }
     } catch (error) {
       setMatch(null);
       setNotice(requestMessage(error));
@@ -155,7 +163,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     const parsed = validateProfile(profile, { reviewCase: true });
     const ownership = validateOwnership({ mode: ownershipMode, controller, claimCommitment, recoverySaved, walletProof });
     setErrors({ ...parsed.errors, ...ownership.errors });
-    if (Object.keys(parsed.errors).length || Object.keys(ownership.errors).length || match?.status !== "no_match") return;
+    if (Object.keys(parsed.errors).length || Object.keys(ownership.errors).length || !registrationReady(match)) return;
     registerLock.current = true;
     setBusy("register");
     setNotice("");
@@ -173,6 +181,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
       setPhase(confirmed ? "confirmed" : result?.status === "registration_reconciliation_required" ? "uncertain" : pendingRegistration(result) ? "pending" : result?.status || "confirmed");
       if (confirmed) {
         setRecoveryCode("");
+        clearRegistrationDraft();
         setProfile(emptyProfile());
         setMatch(null);
         setRecoverySaved(false);
@@ -206,7 +215,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     <div>
       <PageHeader eyebrow={page.eyebrow} title={page.title} description={page.description} crumbs={crumbs} />
       <form className="space-y-4" onSubmit={onMatch} noValidate>
-        <Card title="Patient profile" description="Names and contact details are sent only for this request. They are not stored in this browser.">
+        <Card title="Patient profile" description="These registration fields stay in this browser until the patient is confirmed. The recovery code is not saved.">
           <div className="grid gap-4 sm:grid-cols-2">
             <Input label="Full name" name="fullName" value={profile.fullName} error={errors.fullName} autoComplete="name" onChange={(event) => change("fullName", event.target.value)} />
             <Input label="Date of birth" name="dateOfBirth" type="date" value={profile.dateOfBirth} error={errors.dateOfBirth} onChange={(event) => change("dateOfBirth", event.target.value)} />
@@ -222,7 +231,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 name="reviewCaseId"
                 value={profile.reviewCaseId}
                 error={errors.reviewCaseId}
-                hint="Optional. Use this only after a different-person decision, and only when the match is no match."
+                hint="Use the case ID after a different-person decision. Check for a match again. Pending, rejected, mismatched, and already-used cases cannot register."
                 onChange={(event) => change("reviewCaseId", event.target.value)}
               />
             ) : null}
@@ -294,7 +303,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
             <Button type="submit" loading={busy === "match"} disabled={Boolean(busy)}>Check for a match</Button>
             {canRegister ? (
-              <Button type="button" variant="secondary" onClick={onRegister} loading={busy === "register"} disabled={Boolean(busy) || match?.status !== "no_match"}>
+              <Button type="button" variant="secondary" onClick={onRegister} loading={busy === "register"} disabled={Boolean(busy) || !registrationReady(match)}>
                 Register patient
               </Button>
             ) : null}

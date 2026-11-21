@@ -33,6 +33,99 @@ const profileSchema = z.object({
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
 const DUPLICATE_COMMITMENT_MESSAGE = "A patient with this identity commitment is already registered.";
+const REVIEW_PENDING = "This review case is still pending. Registration stays blocked until a reviewer marks the person as different.";
+const REVIEW_SAME = "This review linked the profile to an existing patient. A new Patient ID was not created.";
+const REVIEW_REJECTED = "This review was rejected. Registration is not authorized.";
+const REVIEW_MISMATCH = "This review case does not match the patient details entered.";
+const REVIEW_USED = "This review case has already been used for a registration.";
+const REVIEW_MISSING = "That review case was not found.";
+const REVIEW_NEW = "A new possible match appeared after this review. Review the new case before registering.";
+
+function optionalReviewCaseId(body) {
+  const value = typeof body?.reviewCaseId === "string" ? body.reviewCaseId.trim() : "";
+  if (!value) return null;
+  return z.string().uuid().parse(value);
+}
+
+function reviewFailure(action) {
+  if (action === "pending" || action === "add_candidates") return { status: 409, error: REVIEW_PENDING };
+  if (action === "same_person") return { status: 409, error: REVIEW_SAME };
+  if (action === "rejected") return { status: 409, error: REVIEW_REJECTED };
+  if (action === "mismatch") return { status: 409, error: REVIEW_MISMATCH };
+  if (action === "used") return { status: 409, error: REVIEW_USED };
+  if (action === "not_found") return { status: 404, error: REVIEW_MISSING };
+  return null;
+}
+
+function sendJson(res, status, body) {
+  res.status(status).json(body);
+  return true;
+}
+
+async function respondToReview(res, db, { gate, result, profile, hashes, actorId, hospitalId, registering }) {
+  if (gate.action === "authorized") {
+    if (registering) return false;
+    return sendJson(res, 200, {
+      status: "review_authorized",
+      reviewCaseId: gate.reviewCaseId,
+      reviewState: "approved",
+      candidateCount: result.candidateCount || 0,
+      registrationReady: true
+    });
+  }
+  if (gate.action === "pending" || gate.action === "add_candidates") {
+    if (gate.action === "add_candidates" && typeof db.addReviewCandidates === "function") {
+      await db.addReviewCandidates(gate.reviewCaseId, hospitalId, result.candidates || []);
+    }
+    if (!registering) {
+      return sendJson(res, 202, {
+        status: "review_required",
+        reviewCaseId: gate.reviewCaseId,
+        reviewState: "pending",
+        candidateCount: result.candidateCount || 0
+      });
+    }
+    return sendJson(res, 409, { error: REVIEW_PENDING });
+  }
+  if (gate.action === "same_person" || gate.action === "used" || gate.action === "existing") {
+    const patientId = gate.patientId || result.patient?.patient_id;
+    if (registering) return sendJson(res, 200, { status: "existing_patient", patientId });
+    return sendJson(res, 200, {
+      status: gate.action === "same_person" ? "review_same_person" : "existing_patient",
+      patientId,
+      patient: patientId ? { patient_id: patientId, did: result.patient?.did } : result.patient
+    });
+  }
+  const failure = reviewFailure(gate.action);
+  if (failure) return sendJson(res, failure.status, { error: failure.error });
+  if (gate.action === "new_candidates" || (gate.action === "create" && result.status === "possible_match")) {
+    const review = await db.createReviewCase(profile, hashes, result.candidates || [], actorId, hospitalId);
+    return sendJson(res, 202, {
+      status: "review_required",
+      reviewCaseId: review.id,
+      reviewState: gate.action === "new_candidates" ? "new_candidates" : "opened",
+      message: gate.action === "new_candidates" ? REVIEW_NEW : undefined,
+      candidateCount: result.candidateCount || 0
+    });
+  }
+  if (result.status === "high_confidence") {
+    return sendJson(res, 200, registering
+      ? { status: "existing_patient", patientId: result.patient.patient_id }
+      : { status: result.status, patient: result.patient });
+  }
+  return false;
+}
+
+async function reviewGate(db, { hospitalId, hashes, reviewCaseId, match }) {
+  if (typeof db.assessReviewAuthorization !== "function") return { action: "create" };
+  return db.assessReviewAuthorization({
+    hospitalId,
+    hashes,
+    reviewCaseId,
+    candidateIds: match?.candidates || [],
+    highConfidenceId: match?.status === "high_confidence" ? match.patient?.id || "" : ""
+  });
+}
 
 function readPatientOwnership(body) {
   const address = typeof body.controller === "string" ? body.controller.trim() : "";
@@ -217,32 +310,36 @@ function createApp({ db, blockchain, config }) {
   app.post("/patients/match", staff, async (req, res, next) => {
     try {
       const profile = profileSchema.parse(req.body);
+      const reviewCaseId = optionalReviewCaseId(req.body);
+      const hashes = db.identityHashes(profile);
       const result = await db.matchPatient(profile, req.user.hospital_id);
-      if (result.status === "possible_match") {
-        const review = await db.createReviewCase(profile, db.identityHashes(profile), result.candidates, req.user.sub, req.user.hospital_id);
-        return res.status(202).json({ status: "review_required", reviewCaseId: review.id, candidateCount: result.candidateCount });
-      }
+      const gate = await reviewGate(db, { hospitalId: req.user.hospital_id, hashes, reviewCaseId, match: result });
+      const held = await respondToReview(res, db, { gate, result, profile, hashes, actorId: req.user.sub, hospitalId: req.user.hospital_id, registering: false });
+      if (held) return;
       res.json(result.status === "high_confidence"
         ? { status: result.status, patient: result.patient }
-        : { status: result.status, candidateCount: result.candidateCount });
+        : { status: result.status, candidateCount: result.candidateCount || 0 });
     } catch (error) { next(error); }
   });
 
   app.post("/patients", registrar, async (req, res, next) => {
     try {
       const profile = profileSchema.parse(req.body);
-      const reviewCaseId = req.body.reviewCaseId
-        ? z.string().uuid().parse(req.body.reviewCaseId)
-        : null;
+      let reviewCaseId = optionalReviewCaseId(req.body);
       const hashes = db.identityHashes(profile);
       const match = await db.matchPatient(profile, req.user.hospital_id);
-      if (match.status === "high_confidence") {
-        return res.status(200).json({ status: "existing_patient", patientId: match.patient.patient_id });
-      }
-      if (match.status === "possible_match") {
-        const review = await db.createReviewCase(profile, hashes, match.candidates, req.user.sub, req.user.hospital_id);
-        return res.status(202).json({ status: "review_required", reviewCaseId: review.id, candidateCount: match.candidateCount });
-      }
+      const gate = await reviewGate(db, { hospitalId: req.user.hospital_id, hashes, reviewCaseId, match });
+      if (gate.action === "authorized") reviewCaseId = gate.reviewCaseId;
+      const held = await respondToReview(res, db, {
+        gate,
+        result: match,
+        profile,
+        hashes,
+        actorId: req.user.sub,
+        hospitalId: req.user.hospital_id,
+        registering: true
+      });
+      if (held) return;
       // Stop before pending patients, registration rows, and submission audits.
       if (config.blockchainEnabled === false) {
         return res.status(503).json({ error: "Blockchain registration is unavailable" });
@@ -430,7 +527,12 @@ function createApp({ db, blockchain, config }) {
         return res.status(503).json({ error: "Blockchain registration is unavailable" });
       }
       const result = await db.resolveReviewCase(req.params.id, input, req.user.sub, req.user.hospital_id);
-      res.json({ status: result.status, patientId: result.linkedPatientId || undefined, registrationRequired: result.status === "resolved_different" });
+      res.json({
+        status: result.status,
+        patientId: result.linkedPatientId || undefined,
+        reviewCaseId: result.status === "resolved_different" ? req.params.id : undefined,
+        registrationRequired: result.status === "resolved_different"
+      });
     } catch (error) { next(error); }
   });
 

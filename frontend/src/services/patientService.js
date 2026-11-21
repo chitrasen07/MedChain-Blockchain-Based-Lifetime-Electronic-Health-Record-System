@@ -3,8 +3,40 @@ import { apiClient } from "../lib/api.js";
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 
+const DRAFT_KEY = "medchain.registrationDraft";
+
 export function emptyProfile() {
   return { fullName: "", dateOfBirth: "", gender: "", bloodGroup: "", mobile: "", email: "", emergencyContact: "", reviewCaseId: "" };
+}
+
+export function loadRegistrationDraft() {
+  const storage = globalThis.sessionStorage;
+  if (!storage) return null;
+  try {
+    const parsed = JSON.parse(storage.getItem(DRAFT_KEY) || "null");
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.recoveryCode || parsed.secret || parsed.claimCommitment) return null;
+    return { ...emptyProfile(), ...Object.fromEntries(Object.keys(emptyProfile()).map((key) => [key, String(parsed[key] || "")])) };
+  } catch {
+    return null;
+  }
+}
+
+export function saveRegistrationDraft(profile) {
+  const storage = globalThis.sessionStorage;
+  if (!storage || !profile) return;
+  const draft = emptyProfile();
+  for (const key of Object.keys(draft)) draft[key] = String(profile[key] || "");
+  storage.setItem(DRAFT_KEY, JSON.stringify(draft));
+}
+
+export function clearRegistrationDraft() {
+  globalThis.sessionStorage?.removeItem(DRAFT_KEY);
+}
+
+export function rememberResolvedReview(reviewCaseId) {
+  const current = loadRegistrationDraft() || emptyProfile();
+  saveRegistrationDraft({ ...current, reviewCaseId });
 }
 
 export function validateProfile(input, { reviewCase = false } = {}) {
@@ -47,7 +79,22 @@ export function describeMatch(result) {
       ? `A confirmed patient matches this profile. Patient ID ${patientId}.`
       : "A confirmed patient matches this profile.";
   }
+  if (result?.status === "review_authorized") {
+    return "Different-person review accepted. This patient can be registered. No new review case was created.";
+  }
+  if (result?.status === "review_same_person" || result?.status === "existing_patient") {
+    const patientId = result.patientId || result.patient?.patient_id;
+    return patientId
+      ? `This profile is already registered as ${patientId}. A new Patient ID was not created.`
+      : "This profile is already registered. A new Patient ID was not created.";
+  }
   if (result?.status === "review_required") {
+    if (result.reviewState === "new_candidates") {
+      return result.message || "A new possible match appeared after the earlier review. Resolve the new review case before registering.";
+    }
+    if (result.reviewState === "pending") {
+      return "This review case is still pending. Registration stays blocked until a reviewer marks the person as different.";
+    }
     const count = Number.isInteger(result.candidateCount) ? `${result.candidateCount} candidate(s). ` : "";
     return `${count}This possible match needs review. It was not sent to the chain.`;
   }
@@ -122,10 +169,16 @@ export function describeRegistration(result, error) {
   return "The registration response did not include a known status.";
 }
 
+export function registrationReady(match) {
+  return match?.status === "no_match" || match?.status === "review_authorized";
+}
+
 export function createPatientService(client = apiClient) {
   return {
-    match(profile) {
-      return client.request("/patients/match", { method: "POST", body: profile });
+    match(profile, reviewCaseId) {
+      const body = { ...profile };
+      if (reviewCaseId) body.reviewCaseId = reviewCaseId;
+      return client.request("/patients/match", { method: "POST", body });
     },
     walletChallenge(walletAddress) {
       return client.request("/patient-registration/wallet-challenge", { method: "POST", body: { walletAddress } });

@@ -9,6 +9,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { ApiError, messageForRequest } from "../lib/api";
 import { pageChrome } from "../lib/pageChrome";
+import { rememberResolvedReview } from "../services/patientService";
 import { describeDecision, reviewService, validateDecision } from "../services/reviewService";
 
 function formatTimestamp(value) {
@@ -96,8 +97,10 @@ export function ReviewQueueScreen({ pageKey }) {
     setPending(true);
     setNotice("");
     try {
-      const result = await reviewService.decide(detail.id, parsed.body);
-      setOutcome(describeDecision(result));
+      const caseId = detail.id;
+      const result = await reviewService.decide(caseId, parsed.body);
+      if (result?.registrationRequired) rememberResolvedReview(result.reviewCaseId || caseId);
+      setOutcome(describeDecision({ ...result, reviewCaseId: result?.reviewCaseId || caseId }));
       setNotes("");
       setConfirming(false);
       setDetail(null);

@@ -20,7 +20,8 @@ export function validateDecision(input, candidateIds = []) {
 
 export function describeDecision(result) {
   if (result?.registrationRequired) {
-    return "The case was marked as a different person. An administrator can register that patient. This did not write a chain transaction.";
+    const caseId = result.reviewCaseId ? ` Review case ${result.reviewCaseId}.` : "";
+    return `The case was marked as a different person.${caseId} Return to Patient Registration with the same details and check for a match. No new review case is created, and the patient can then be registered. This did not write a chain transaction.`;
   }
   if (result?.status === "resolved_same") {
     return result.patientId
