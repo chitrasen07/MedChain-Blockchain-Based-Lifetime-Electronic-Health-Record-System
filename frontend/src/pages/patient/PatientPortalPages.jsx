@@ -1,20 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorState } from "../../components/ErrorState";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
+import { Select } from "../../components/Select";
 import { LoadingSkeleton } from "../../components/LoadingSkeleton";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBadge } from "../../components/StatusBadge";
 import { VerificationNotice } from "../../components/VerificationNotice";
 import { ApiError, apiClient, messageForRequest } from "../../lib/api";
-import { SEPOLIA_CHAIN_ID, claimBroadcastAllowed, sendPatientClaim } from "../../lib/claimChain";
+import { claimBroadcastAllowed, sendPatientClaim, waitForReceipt } from "../../lib/claimChain";
 import { grantCalldata, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../../lib/consentChain";
+import { ensurePatientSepolia } from "../../lib/patientWallet";
 import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode, sepoliaTransactionUrl } from "../../lib/ownership";
 import { useAuth } from "../../context/useAuth";
-import { claimStatusBody, patientAuthMessage } from "../../services/patientPortal";
+import { claimStatusBody, clinicianLabel, patientAuthMessage, shortWallet } from "../../services/patientPortal";
 
 function usePortalGet(path) {
   const [attempt, setAttempt] = useState(0);
@@ -424,80 +426,120 @@ function expiryLabel(expiresAt) {
   return new Date(Number(expiresAt) * 1000).toLocaleString();
 }
 
+function doctorForWallet(doctors, wallet) {
+  return doctors.find((doctor) => doctor.walletAddress.toLowerCase() === String(wallet || "").toLowerCase()) || null;
+}
+
+function expirySeconds(expiresOn) {
+  if (!expiresOn) return 0;
+  const expiresAt = Math.floor(Date.parse(`${expiresOn}T23:59:59Z`) / 1000);
+  if (!Number.isFinite(expiresAt) || expiresAt * 1000 <= Date.now()) return null;
+  return expiresAt;
+}
+
 export function PatientAccessPage() {
   const state = usePortalGet("/patient-portal/access");
-  const [staffWallet, setStaffWallet] = useState("");
+  const [doctors, setDoctors] = useState([]);
+  const [doctorWallet, setDoctorWallet] = useState("");
   const [expiresOn, setExpiresOn] = useState("");
-  const [prepared, setPrepared] = useState("");
+  const [tx, setTx] = useState(null);
   const [notice, setNotice] = useState("");
-  const [chainId, setChainId] = useState(null);
-  const consentTarget = transactionTarget("consent", chainId, import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
-  const broadcastAllowed = Boolean(consentTarget);
+  const sendLock = useRef(false);
   const permissions = state.data?.permissions || [];
   const emergency = state.data?.emergency || [];
   const audit = state.data?.audit || [];
   const grantingDisabled = state.data?.grantingDisabled !== false;
+  const selectedDoctor = doctorForWallet(doctors, doctorWallet);
+  const sending = tx?.phase === "pending";
 
   useEffect(() => {
-    const ethereum = globalThis.window?.ethereum;
-    if (!ethereum?.request) return undefined;
     let active = true;
-    ethereum.request({ method: "eth_chainId" }).then((value) => {
-      if (active) setChainId(Number(value));
-    }).catch(() => {
-      if (active) setChainId(null);
-    });
+    apiClient.request("/patient-portal/clinicians").then(
+      (data) => {
+        if (active) setDoctors(Array.isArray(data?.clinicians) ? data.clinicians : []);
+      },
+      (error) => {
+        if (!active) return;
+        setDoctors([]);
+        setNotice(error instanceof ApiError ? messageForRequest(error) : "Verified doctors could not be loaded.");
+      },
+    );
     return () => {
       active = false;
     };
   }, []);
 
-  function prepareGrant(event) {
-    event.preventDefault();
-    setPrepared("");
+  function rejected(error) {
+    return error?.code === 4001 || error?.code === "wallet_rejected";
+  }
+
+  async function submitConsent({ action, wallet, data }) {
+    if (sendLock.current || grantingDisabled) return;
+    const ethereum = globalThis.window?.ethereum;
+    sendLock.current = true;
     setNotice("");
+    setTx({ action, wallet, phase: "pending", hash: "", message: action === "grant" ? "Checking the selected doctor." : "Waiting for MetaMask approval. Nothing is signed automatically." });
+    try {
+      if (action === "grant") {
+        await apiClient.request("/patient-portal/clinicians/authorization", { method: "POST", body: { walletAddress: wallet } });
+      }
+      setTx({ action, wallet, phase: "pending", hash: "", message: "Approve the transaction in MetaMask. It is not signed automatically." });
+      await ensurePatientSepolia();
+      const nextChain = Number(await ethereum.request({ method: "eth_chainId" }));
+      const target = transactionTarget("consent", nextChain, import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
+      if (!target || !data) throw new Error("The consent transaction could not be prepared.");
+      const hash = await sendPreparedTransaction({ chainId: nextChain, contractAddress: target, data, ethereum });
+      setTx({ action, wallet, phase: "pending", hash, message: "Transaction submitted. Waiting for Sepolia confirmation." });
+      const receipt = await waitForReceipt(ethereum, hash);
+      if (!receipt) {
+        setTx({ action, wallet, phase: "pending", hash, message: "The transaction was submitted. Confirmation is still pending." });
+        return;
+      }
+      if (receipt.status === "0x1" || receipt.status === 1) {
+        setTx({ action, wallet, phase: "confirmed", hash, message: action === "grant" ? "Access was granted." : "Access was revoked." });
+        return;
+      }
+      setTx({ action, wallet, phase: "failed", hash, message: "The transaction failed on Sepolia. No access change was confirmed." });
+    } catch (error) {
+      const phase = rejected(error) ? "rejected" : "failed";
+      const message = rejected(error)
+        ? "MetaMask did not approve the request. Nothing was sent."
+        : error instanceof ApiError
+          ? messageForRequest(error)
+          : error?.message || "The consent transaction was not sent.";
+      setTx({ action, wallet, phase, hash: "", message });
+    } finally {
+      sendLock.current = false;
+    }
+  }
+
+  function grantAccess(event) {
+    event.preventDefault();
     const patientRef = state.data?.patientRef;
-    if (grantingDisabled || !patientRef || !/^0x[0-9a-fA-F]{40}$/.test(staffWallet.trim())) {
-      setNotice("Consent can be prepared only by the controller, for a clinical wallet.");
+    const expiresAt = expirySeconds(expiresOn);
+    if (grantingDisabled || !selectedDoctor || !patientRef) {
+      setNotice("Choose a verified doctor. Only the patient controller wallet can grant access.");
       return;
     }
-    const expiresAt = expiresOn ? Math.floor(Date.parse(`${expiresOn}T23:59:59Z`) / 1000) : 0;
-    if (expiresOn && (!Number.isFinite(expiresAt) || expiresAt * 1000 <= Date.now())) {
+    if (expiresAt === null) {
       setNotice("Choose an expiry in the future, or leave it empty to keep the grant until you revoke it.");
       return;
     }
-    const data = grantCalldata(patientRef, staffWallet.trim(), expiresAt);
+    const data = grantCalldata(patientRef, selectedDoctor.walletAddress, expiresAt);
     if (!data) {
       setNotice("The grant could not be prepared.");
       return;
     }
-    setPrepared(data);
-    setNotice("The grant is prepared. MetaMask will ask the patient wallet to approve it.");
+    submitConsent({ action: "grant", wallet: selectedDoctor.walletAddress, data });
   }
 
-  async function useSepolia() {
-    setNotice("");
-    try {
-      await globalThis.window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xaa36a7" }] });
-      setChainId(SEPOLIA_CHAIN_ID);
-      setNotice("The wallet is on Sepolia. No consent transaction has been sent.");
-    } catch (error) {
-      setNotice(error?.code === 4001 ? "MetaMask did not approve the network change." : error?.message || "The wallet was not switched.");
+  function revokeAccess(wallet) {
+    const data = revokeCalldata(state.data?.patientRef, wallet);
+    if (!data) {
+      setNotice("The revocation could not be prepared.");
+      return;
     }
-  }
-
-  async function sendPrepared(data) {
-    try {
-      await sendPreparedTransaction({
-        chainId,
-        contractAddress: consentTarget,
-        data,
-        ethereum: globalThis.window?.ethereum,
-      });
-      setNotice("The consent transaction was submitted. MetaMask approval was required.");
-    } catch (error) {
-      setNotice(error?.message || "The consent transaction was not sent.");
-    }
+    submitConsent({ action: "revoke", wallet, data });
   }
 
   return (
@@ -521,16 +563,16 @@ export function PatientAccessPage() {
         <Card title="Clinical wallets">
           <ul className="space-y-4">
             {permissions.map((permission) => {
-              const revoke = revokeCalldata(state.data.patientRef, permission.wallet);
+              const doctor = doctorForWallet(doctors, permission.wallet);
               return (
                 <li key={permission.wallet} className="border-b border-line pb-4 last:border-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge tone={permission.status === "active" ? "success" : "warning"}>{permission.status}</StatusBadge>
                     <p className="text-sm text-ink">{permission.expiresAt ? expiryLabel(permission.expiresAt) : "Until revoked"}</p>
                   </div>
-                  <p className="mt-1 break-all text-xs text-muted">{permission.wallet}</p>
-                  <Button className="mt-2" type="button" variant="secondary" disabled={grantingDisabled || !broadcastAllowed || !revoke || permission.status !== "active"} onClick={() => sendPrepared(revoke)}>
-                    Revoke consent in MetaMask
+                  <p className="mt-1 text-sm text-ink">{doctor ? doctor.name : "Clinical wallet"} · {shortWallet(permission.wallet)}</p>
+                  <Button className="mt-2" type="button" variant="secondary" disabled={grantingDisabled || sending || permission.status !== "active"} onClick={() => revokeAccess(permission.wallet)}>
+                    Revoke access in MetaMask
                   </Button>
                 </li>
               );
@@ -539,20 +581,35 @@ export function PatientAccessPage() {
         </Card>
       ) : null}
       {state.phase === "ready" ? (
-        <Card className="mt-4" title="Grant consent">
-          <form className="max-w-lg space-y-4" onSubmit={prepareGrant}>
-            <Input label="Clinical wallet" name="staffWallet" value={staffWallet} onChange={(event) => setStaffWallet(event.target.value)} placeholder="0x" hint="The wallet that will read or anchor records." />
+        <Card className="mt-4" title="Grant access">
+          <form className="max-w-lg space-y-4" onSubmit={grantAccess}>
+            <Select label="Doctor" name="doctor" value={doctorWallet} onChange={(event) => setDoctorWallet(event.target.value)} hint="Active doctors with a verified clinical wallet.">
+              <option value="">Select a doctor</option>
+              {doctors.map((doctor) => (
+                <option key={doctor.walletAddress} value={doctor.walletAddress}>{clinicianLabel(doctor)}</option>
+              ))}
+            </Select>
             <Input label="Expiry date" name="expiresOn" type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} hint="Optional. Empty means the grant lasts until you revoke it." />
+            {selectedDoctor ? (
+              <dl className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">
+                <div className="flex justify-between gap-3"><dt>Doctor</dt><dd>{selectedDoctor.name}</dd></div>
+                <div className="flex justify-between gap-3"><dt>Role</dt><dd>{selectedDoctor.role}</dd></div>
+                <div className="flex justify-between gap-3"><dt>Wallet</dt><dd>{shortWallet(selectedDoctor.walletAddress)}</dd></div>
+                <div className="flex justify-between gap-3"><dt>Action</dt><dd>Grant record access on Sepolia</dd></div>
+                <div className="flex justify-between gap-3"><dt>Expires</dt><dd>{expiresOn || "Until you revoke it"}</dd></div>
+              </dl>
+            ) : null}
+            {doctors.length === 0 ? <p className="text-sm leading-6 text-ink">No verified doctor is available yet. A hospital administrator must activate a doctor wallet first.</p> : null}
             {notice ? <p role="status" className="text-sm leading-6 text-ink">{notice}</p> : null}
-            {prepared ? <p className="break-all text-xs leading-5 text-muted">{prepared}</p> : null}
-            <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="secondary" onClick={useSepolia} disabled={chainId === SEPOLIA_CHAIN_ID}>Use Sepolia</Button>
-              <Button type="submit" disabled={grantingDisabled}>Prepare grant</Button>
-              <Button type="button" variant="secondary" disabled={grantingDisabled || !broadcastAllowed || !prepared} onClick={() => sendPrepared(prepared)}>
-                Approve grant in MetaMask
-              </Button>
-            </div>
-            <p className="text-xs leading-5 text-muted">The controller signs this transaction on the connected network. The hospital wallet is not asked to sign.</p>
+            {tx ? (
+              <div role="status" className="space-y-1">
+                <StatusBadge tone={tx.phase === "confirmed" ? "success" : tx.phase === "failed" || tx.phase === "rejected" ? "danger" : "warning"}>{tx.phase}</StatusBadge>
+                <p className="text-sm leading-6 text-ink">{tx.message}</p>
+                {sepoliaTransactionUrl(tx.hash) ? <a className="text-sm font-medium text-teal-dark underline" href={sepoliaTransactionUrl(tx.hash)} target="_blank" rel="noreferrer">View transaction on Sepolia</a> : null}
+              </div>
+            ) : null}
+            <Button type="submit" loading={sending && tx?.action === "grant"} disabled={grantingDisabled || sending || !selectedDoctor}>Grant access with MetaMask</Button>
+            <p className="text-xs leading-5 text-muted">MetaMask must approve this transaction. The patient controller wallet signs it, and the hospital wallet is not used.</p>
           </form>
         </Card>
       ) : null}

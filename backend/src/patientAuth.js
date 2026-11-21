@@ -77,6 +77,13 @@ async function readController(blockchain, patientRef) {
   }
 }
 
+function presentConsentDoctor(row) {
+  let walletAddress = "";
+  try { walletAddress = getAddress(row?.walletAddress); } catch { return null; }
+  const name = typeof row?.fullName === "string" && row.fullName.trim() ? row.fullName.trim() : "Doctor";
+  return { name, role: "Doctor", walletAddress };
+}
+
 function profileFields(value) {
   const source = value && typeof value === "object" ? value : {};
   const profile = {};
@@ -277,8 +284,36 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         broadcast: "disabled",
         message: grantingDisabled
           ? "Only the patient controller can grant consent. No grant is submitted from the hospital wallet."
-          : "Prepare the grant in this browser and sign it with the controller wallet. Public networks are not sent without approval."
+          : "Choose a verified doctor and approve access in MetaMask. The hospital wallet cannot grant consent."
       });
+    } catch (error) { next(error); }
+  });
+
+  app.get("/patient-portal/clinicians", patient, async (req, res, next) => {
+    try {
+      if (typeof db.listConsentDoctors !== "function") throw chainUnavailable();
+      const rows = await db.listConsentDoctors(req.patient.hospital_id);
+      res.json({ clinicians: rows.map(presentConsentDoctor).filter(Boolean) });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/patient-portal/clinicians/authorization", patient, async (req, res, next) => {
+    try {
+      const parsed = walletSchema.safeParse(req.body?.walletAddress);
+      if (!parsed.success) return res.status(400).json({ error: "Choose an active doctor with a verified wallet." });
+      if (typeof db.listConsentDoctors !== "function" || typeof blockchain.hasChainRole !== "function") throw chainUnavailable();
+      const walletAddress = getAddress(parsed.data);
+      const rows = await db.listConsentDoctors(req.patient.hospital_id);
+      const match = rows.map(presentConsentDoctor).find((doctor) => doctor && doctor.walletAddress.toLowerCase() === walletAddress.toLowerCase());
+      if (!match) return res.status(403).json({ error: "Choose an active doctor with a verified wallet." });
+      let authorized = false;
+      try {
+        authorized = await blockchain.hasChainRole("DOCTOR", walletAddress);
+      } catch {
+        throw chainUnavailable();
+      }
+      if (!authorized) return res.status(403).json({ error: "This doctor is not authorized on Sepolia." });
+      res.json(match);
     } catch (error) { next(error); }
   });
 }

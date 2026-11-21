@@ -1,3 +1,16 @@
+export function shortWallet(address) {
+  const value = String(address || "");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) return "";
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+export function clinicianLabel(clinician) {
+  const name = String(clinician?.name || "Doctor");
+  const role = String(clinician?.role || "Doctor");
+  const wallet = shortWallet(clinician?.walletAddress);
+  return wallet ? `${name} · ${role} · ${wallet}` : name;
+}
+
 export function claimStatusBody({ patientId, walletAddress, claimCommitment }) {
   return { patientId, walletAddress, claimCommitment };
 }

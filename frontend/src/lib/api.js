@@ -59,6 +59,8 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "The current password was not accepted.",
   "The patient wallet must sign the link before registration.",
   "The wallet signature could not be verified.",
+  "Choose an active doctor with a verified wallet.",
+  "This doctor is not authorized on Sepolia.",
   "Choose a password that is different from the current password.",
   "Use at least 12 characters with a letter and a number.",
   "Too many password changes. Wait and try again.",

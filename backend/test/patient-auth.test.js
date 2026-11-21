@@ -57,6 +57,9 @@ function harness(overrides = {}) {
     async listPatientVisits(id) {
       calls.push(["visits", id]);
       return state.visits.filter((visit) => visit.patientId === id);
+    },
+    async listConsentDoctors() {
+      return state.doctors || [];
     }
   };
   const blockchain = {
@@ -80,6 +83,10 @@ function harness(overrides = {}) {
     async listAudit() {
       calls.push("audit");
       return [];
+    },
+    async hasChainRole(role, account) {
+      calls.push("role");
+      return Boolean(state.roles?.[`${role}:${String(account).toLowerCase()}`]);
     }
   };
   const app = createApp({
@@ -288,4 +295,43 @@ test("a patient profile returns only that patient's decrypted fields", async () 
   assert.equal(profile.body.patientId, "PATIENT-000001");
   assert.deepEqual(profile.body.profile, { fullName: "Synthetic Patient", dateOfBirth: "1990-01-01" });
   assert.equal(JSON.stringify(profile.body).includes("do-not-copy"), false);
+});
+
+test("a patient can check an active doctor without seeing staff details or sending a transaction", async () => {
+  const patientWallet = Wallet.createRandom();
+  const doctor = Wallet.createRandom();
+  const unauthorized = Wallet.createRandom();
+  const stranger = Wallet.createRandom();
+  const { app, calls } = harness({
+    controllers: { [refA]: patientWallet.address },
+    patients: [patient("patient-a", "PATIENT-000001", refA)],
+    doctors: [
+      { fullName: "Asha Verma", walletAddress: doctor.address, email: "doctor@medchain.test" },
+      { fullName: "Pending Doctor", walletAddress: unauthorized.address, email: "pending@medchain.test" },
+      { fullName: "Hidden", walletAddress: "not-a-wallet", email: "hidden@medchain.test" }
+    ],
+    roles: { [`DOCTOR:${doctor.address.toLowerCase()}`]: true }
+  });
+  const { token } = await signIn(app, patientWallet, "PATIENT-000001");
+  const bearer = { Authorization: `Bearer ${token.body.token}` };
+  const list = await request(app).get("/patient-portal/clinicians").set(bearer);
+  const allowed = await request(app).post("/patient-portal/clinicians/authorization").set(bearer).send({ walletAddress: doctor.address });
+  const chainDenied = await request(app).post("/patient-portal/clinicians/authorization").set(bearer).send({ walletAddress: unauthorized.address });
+  const unknown = await request(app).post("/patient-portal/clinicians/authorization").set(bearer).send({ walletAddress: stranger.address });
+  const anonymous = await request(app).get("/patient-portal/clinicians");
+  assert.equal(list.status, 200);
+  assert.equal(list.body.clinicians.length, 2);
+  assert.equal(list.body.clinicians[0].name, "Asha Verma");
+  assert.equal(list.body.clinicians[0].role, "Doctor");
+  assert.equal(list.body.clinicians[0].walletAddress, doctor.address);
+  assert.equal(JSON.stringify(list.body).includes("@"), false);
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.body.walletAddress, doctor.address);
+  assert.equal(chainDenied.status, 403);
+  assert.equal(chainDenied.body.error, "This doctor is not authorized on Sepolia.");
+  assert.equal(unknown.status, 403);
+  assert.equal(unknown.body.error, "Choose an active doctor with a verified wallet.");
+  assert.equal(anonymous.status, 401);
+  assert.equal(calls.includes("submit"), false);
+  assert.equal(calls.includes("role"), true);
 });

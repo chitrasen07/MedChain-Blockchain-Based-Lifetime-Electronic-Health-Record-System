@@ -180,6 +180,13 @@ function createDb(config) {
       );
       await query("INSERT INTO audit_events (actor_id,action,resource_id,metadata) VALUES ($1,'USER_DISABLED',$2,$3)", [actorId, userId, JSON.stringify({ hospitalId })]);
     },
+    async listConsentDoctors(hospitalId) {
+      const result = await query(
+        "SELECT u.full_name AS \"fullName\", a.wallet_address AS \"walletAddress\" FROM users u JOIN staff_chain_authorizations a ON a.user_id=u.id WHERE u.hospital_id=$1 AND u.role='doctor' AND u.status='active' AND a.status='active' AND a.action='grant' AND a.chain_role='DOCTOR' AND a.wallet_address IS NOT NULL ORDER BY u.full_name NULLS LAST, u.created_at",
+        [hospitalId]
+      );
+      return result.rows;
+    },
     async listUsers(hospitalId) {
       const result = await query(
         "SELECT u.id,u.email,u.full_name AS \"fullName\",u.role,u.status,u.created_at AS \"createdAt\",a.wallet_address AS \"walletAddress\",a.chain_role AS \"chainRole\",a.previous_chain_role AS \"previousChainRole\",a.previous_wallet_address AS \"previousWalletAddress\",a.status AS \"authorizationStatus\",a.action AS \"authorizationAction\",a.tx_hash AS \"authorizationTx\" FROM users u LEFT JOIN staff_chain_authorizations a ON a.user_id=u.id WHERE u.hospital_id=$1 ORDER BY u.created_at",
