@@ -137,7 +137,7 @@ export const pages = {
     eyebrow: "Hospital Admin",
     title: "Patient Registration",
     description:
-      "Check for a confirmed match, then register with the patient's wallet or with a recovery code. A wallet link can sign in immediately. A recovery code uses the one-hour Sepolia claim.",
+      "Check for a confirmed match, then register with the patient's Sepolia wallet. That is the recommended path and allows immediate sign-in. Registration without a wallet remains available and requires a later ownership claim.",
     kind: "table",
     columns: [
       { key: "patientId", header: "Patient ID" },

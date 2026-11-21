@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Input } from "../components/Input";
@@ -6,7 +6,7 @@ import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, messageForRequest } from "../lib/api";
 import { claimCommitmentForRecoveryCode, createRecoveryCode, sepoliaTransactionUrl } from "../lib/ownership";
-import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
+import { connectPatientWallet, ensurePatientSepolia, signPatientLogin } from "../lib/patientWallet";
 import { pageChrome } from "../lib/pageChrome";
 import { describeMatch, describeRegistration, emptyProfile, patientService, validateOwnership, validateProfile } from "../services/patientService";
 
@@ -66,7 +66,8 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
   const [match, setMatch] = useState(null);
   const [registration, setRegistration] = useState(null);
   const [phase, setPhase] = useState("");
-  const [ownershipMode, setOwnershipMode] = useState("claim");
+  const [ownershipMode, setOwnershipMode] = useState("wallet");
+  const registerLock = useRef(false);
   const [controller, setController] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
   const [claimCommitment, setClaimCommitment] = useState("");
@@ -112,14 +113,21 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     setErrors((current) => ({ ...current, claimCommitment: undefined, recoverySaved: undefined }));
   }
 
+  function walletNotice(error, fallback) {
+    if (error?.code === 4001 || error?.code === "wallet_rejected") return error.message || "MetaMask did not approve the request. No transaction was sent.";
+    return error?.message || fallback;
+  }
+
   async function connectWallet() {
     setBusy("wallet");
     setNotice("");
     try {
+      await ensurePatientSepolia();
       setController(await connectPatientWallet());
       setWalletProof(null);
+      setNotice("The patient wallet is connected on Sepolia. Ask them to sign the one-time wallet link. Registration has not been sent.");
     } catch (error) {
-      setNotice(error?.code === 4001 ? "MetaMask did not approve the request." : error?.message || "The wallet could not be connected.");
+      setNotice(walletNotice(error, "The wallet could not be connected. No transaction was sent."));
     } finally {
       setBusy("");
     }
@@ -129,23 +137,26 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
     setBusy("sign");
     setNotice("");
     try {
+      await ensurePatientSepolia();
       const challenge = await patientService.walletChallenge(controller);
       const signature = await signPatientLogin(challenge.message, controller);
       setWalletProof({ nonce: challenge.nonce, signature });
-      setNotice("The patient signed the wallet link. Registration has not been sent.");
+      setNotice("The patient signed the wallet link. It can be used once. Registration has not been sent.");
     } catch (error) {
       setWalletProof(null);
-      setNotice(error?.code === 4001 ? "MetaMask did not approve the signature." : requestMessage(error));
+      setNotice(error instanceof ApiError ? requestMessage(error) : walletNotice(error, "The wallet link could not be signed. No transaction was sent."));
     } finally {
       setBusy("");
     }
   }
 
   async function onRegister() {
+    if (registerLock.current) return;
     const parsed = validateProfile(profile, { reviewCase: true });
     const ownership = validateOwnership({ mode: ownershipMode, controller, claimCommitment, recoverySaved, walletProof });
     setErrors({ ...parsed.errors, ...ownership.errors });
     if (Object.keys(parsed.errors).length || Object.keys(ownership.errors).length || match?.status !== "no_match") return;
+    registerLock.current = true;
     setBusy("register");
     setNotice("");
     setPhase("submitting");
@@ -165,6 +176,12 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
         setProfile(emptyProfile());
         setMatch(null);
         setRecoverySaved(false);
+        setWalletProof(null);
+        setController("");
+        setClaimCommitment("");
+        setNotice(ownershipMode === "wallet"
+          ? "Registration is confirmed. The patient can sign in now with the same wallet. No recovery code, announcement, reveal, or waiting period is required."
+          : "Registration is confirmed without a wallet. The patient must complete the later ownership claim before signing in.");
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && messageForRequest(error).includes("identity commitment")) {
@@ -180,6 +197,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
         setNotice(requestMessage(error));
       }
     } finally {
+      registerLock.current = false;
       setBusy("");
     }
   }
@@ -218,8 +236,8 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                   className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "wallet" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
                   onClick={() => setOwnershipMode("wallet")}
                 >
-                  <span className="block text-sm font-semibold text-navy">Register with wallet</span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">The patient connects MetaMask and signs the link. Sign-in is available as soon as registration is confirmed, with no waiting period.</span>
+                  <span className="block text-sm font-semibold text-navy">Register with wallet <span className="font-medium text-teal-dark">Recommended</span></span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">Connect the patient's MetaMask on Sepolia and sign the one-time wallet link. Ownership is recorded during registration, so the patient can sign in immediately.</span>
                 </button>
                 <button
                   type="button"
@@ -229,7 +247,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                   onClick={() => setOwnershipMode("claim")}
                 >
                   <span className="block text-sm font-semibold text-navy">Register without a wallet</span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">Generate a recovery code for the patient. They connect a wallet later, announce a claim, wait one hour, and reveal it before sign-in.</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">Optional legacy path. The record is not linked to a wallet during registration.</span>
                 </button>
               </div>
               {ownershipMode === "wallet" ? (
@@ -246,7 +264,8 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 </div>
               ) : (
                 <div className="mt-4">
-                  <div className="flex flex-col gap-2 sm:flex-row">
+                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">This path requires a later ownership claim. The patient must announce the claim, wait one hour, and reveal the recovery code within 24 hours. Missing that window blocks sign-in.</p>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <Button type="button" variant="secondary" onClick={generateRecoveryCode}>Generate recovery code</Button>
                     {recoveryCode ? (
                       <>
