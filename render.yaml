@@ -27,3 +27,5 @@ services:
         sync: false
       - key: CORS_ORIGIN
         sync: false
+      - key: DEMO_DISABLE_RATE_LIMIT
+        value: "true"

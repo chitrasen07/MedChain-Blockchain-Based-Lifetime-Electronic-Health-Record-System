@@ -58,13 +58,27 @@ function ownershipFromRegistration(registration, fallback) {
   return { controller: stored, claimCommitment: ZERO_BYTES32, storedController: stored };
 }
 
+const DEMO_RATE_LIMIT_PATHS = new Set([
+  "/patient-auth/challenge",
+  "/patient-auth/token",
+  "/patient-auth/claim-status",
+  "/clinical-wallet/challenge",
+  "/clinical-wallet/session",
+  "/patient-registration/wallet-challenge",
+  "/admin/staff-wallet/challenge"
+]);
+
+function skipDemoRateLimit(config) {
+  return (req) => Boolean(config.demoDisableRateLimit) && DEMO_RATE_LIMIT_PATHS.has(req.path);
+}
+
 function createApp({ db, blockchain, config }) {
   const app = express();
   app.use(helmet());
   app.use(cors({ origin: config.corsOrigin }));
   app.use(express.json({ limit: "32kb" }));
-  app.use(rateLimit({ windowMs: 60_000, limit: 100, standardHeaders: true }));
-  const authRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: true });
+  app.use(rateLimit({ windowMs: 60_000, limit: 100, standardHeaders: true, skip: skipDemoRateLimit(config) }));
+  const authRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: true, skip: skipDemoRateLimit(config) });
   const passwordRateLimit = rateLimit({
     windowMs: 15 * 60_000,
     limit: 5,

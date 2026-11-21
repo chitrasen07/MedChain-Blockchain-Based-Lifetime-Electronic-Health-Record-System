@@ -30,7 +30,8 @@ function createRuntime(env) {
     registryAddress: blockchainEnabled ? env.PATIENT_REGISTRY_ADDRESS : undefined,
     privateKey: blockchainEnabled ? env.BLOCKCHAIN_PRIVATE_KEY : undefined,
     thirdwebSecretKey: blockchainEnabled ? env.THIRDWEB_SECRET_KEY : undefined,
-    corsOrigin: env.CORS_ORIGIN || false
+    corsOrigin: env.CORS_ORIGIN || false,
+    demoDisableRateLimit: String(env.DEMO_DISABLE_RATE_LIMIT || "").trim().toLowerCase() === "true"
   };
 }
 
