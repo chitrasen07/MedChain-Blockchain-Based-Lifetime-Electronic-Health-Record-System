@@ -77,7 +77,61 @@ function sepoliaDestination(data) {
   return "";
 }
 
-export async function sendPreparedTransaction({ chainId, contractAddress, data, ethereum }) {
+const ANCHOR_REVERTS = {
+  "0x82b42900": "This wallet cannot anchor the record. Check the Doctor role and patient consent. No transaction was sent.",
+  "0x453a6b78": "This patient is not active on Sepolia. No transaction was sent.",
+  "0x1a9fb0df": "This version is already anchored. No transaction was sent.",
+  "0x0af806e0": "The prepared record hash does not match this version. No transaction was sent.",
+  "0x041a90b0": "The anchor would fail on Sepolia. No transaction was sent.",
+  "0x3e07f1a1": "Anchor the previous version before this one. No transaction was sent.",
+  "0xfda880e0": "This version is already anchored. No transaction was sent.",
+  "0xeb484391": "The prepared transaction did not match this record. No transaction was sent.",
+};
+
+export function anchorRevertMessage(error) {
+  const text = JSON.stringify(error?.data ?? error?.error ?? error?.message ?? "");
+  const selector = Object.keys(ANCHOR_REVERTS).find((item) => text.toLowerCase().includes(item));
+  return selector ? ANCHOR_REVERTS[selector] : "The anchor would fail on Sepolia. No transaction was sent.";
+}
+
+function assertAnchorDestination(chainId, contractAddress, data) {
+  const chain = Number(chainId);
+  const address = String(contractAddress || "");
+  if (chain === SEPOLIA_CHAIN_ID) {
+    const destination = sepoliaDestination(data);
+    if (destination !== SEPOLIA_MEDICAL_RECORDS || address.toLowerCase() !== destination.toLowerCase()) {
+      throw Object.assign(new Error("The record registry for this network is not the deployed MedChain contract. No transaction was sent."), { code: "broadcast_blocked" });
+    }
+    return;
+  }
+  if (chain !== LOCAL_CLAIM_CHAIN_ID || !/^0x[0-9a-fA-F]{40}$/.test(address) || !/^0x[0-9a-fA-F]{8,}$/.test(data || "")) {
+    throw Object.assign(new Error("Switch the wallet to Sepolia before anchoring. No transaction was sent."), { code: "wrong_network" });
+  }
+}
+
+export async function previewAnchorTransaction({ chainId, contractAddress, data, from, ethereum }) {
+  assertAnchorDestination(chainId, contractAddress, data);
+  if (!ethereum?.request) {
+    throw Object.assign(new Error("A wallet extension is required. No transaction was sent."), { code: "broadcast_blocked" });
+  }
+  const current = Number(await ethereum.request({ method: "eth_chainId" }));
+  if (current !== Number(chainId)) {
+    throw Object.assign(new Error("Switch the wallet to Sepolia before anchoring. No transaction was sent."), { code: "wrong_network" });
+  }
+  const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+  const sender = Array.isArray(accounts) ? accounts[0] : "";
+  if (!/^0x[0-9a-fA-F]{40}$/.test(from || "") || String(sender).toLowerCase() !== String(from).toLowerCase()) {
+    throw Object.assign(new Error("Switch MetaMask to the consented clinical wallet. No transaction was sent."), { code: "wrong_wallet" });
+  }
+  try {
+    await ethereum.request({ method: "eth_call", params: [{ from: sender, to: contractAddress, data }, "latest"] });
+  } catch (error) {
+    throw Object.assign(new Error(anchorRevertMessage(error)), { code: "simulation_failed" });
+  }
+  return sender;
+}
+
+export async function sendPreparedTransaction({ chainId, contractAddress, data, ethereum, from }) {
   const chain = Number(chainId);
   const address = String(contractAddress || "");
   if (chain === SEPOLIA_CHAIN_ID) {
@@ -96,6 +150,9 @@ export async function sendPreparedTransaction({ chainId, contractAddress, data, 
     throw Object.assign(new Error("Switch the wallet to Sepolia before sending this transaction."), { code: "broadcast_blocked" });
   }
   const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+  if (from && String(accounts?.[0] || "").toLowerCase() !== String(from).toLowerCase()) {
+    throw Object.assign(new Error("Switch MetaMask to the consented clinical wallet. No transaction was sent."), { code: "wrong_wallet" });
+  }
   return ethereum.request({
     method: "eth_sendTransaction",
     params: [{ from: accounts[0], to: address, data }],

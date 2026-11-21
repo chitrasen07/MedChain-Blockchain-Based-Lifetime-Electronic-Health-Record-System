@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { VerificationNotice } from "../components/VerificationNotice";
 import { Card } from "../components/Card";
@@ -8,8 +8,9 @@ import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, messageForRequest } from "../lib/api";
-import { SEPOLIA_CHAIN_ID } from "../lib/claimChain";
-import { anchorCalldata, sendPreparedTransaction, transactionTarget } from "../lib/consentChain";
+import { SEPOLIA_CHAIN_ID, waitForReceipt } from "../lib/claimChain";
+import { anchorCalldata, previewAnchorTransaction, sendPreparedTransaction, transactionTarget } from "../lib/consentChain";
+import { ensurePatientSepolia } from "../lib/patientWallet";
 import { sepoliaTransactionUrl } from "../lib/ownership";
 import { pageChrome } from "../lib/pageChrome";
 import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
@@ -39,8 +40,8 @@ export function ClinicalRecordScreen({ pageKey }) {
   const [saving, setSaving] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
   const [chainId, setChainId] = useState(null);
-  const anchorTarget = transactionTarget("anchor", chainId, import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
-  const anchorAllowed = Boolean(anchorTarget);
+  const [sendingAnchor, setSendingAnchor] = useState(false);
+  const anchorLock = useRef(false);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
@@ -99,10 +100,42 @@ export function ClinicalRecordScreen({ pageKey }) {
     }
   }
 
+  function anchorLabel(record) {
+    if (record.chainStatus === "anchored") return "Anchored";
+    if (record.transaction) return "Pending";
+    return "Not anchored";
+  }
+
   async function anchorRecord(record) {
-    setNotice("");
+    if (anchorLock.current) return;
+    const id = patientId.trim().toUpperCase();
+    if (record.chainStatus === "anchored") {
+      setNotice("This version is already anchored. No transaction was sent.");
+      return;
+    }
+    anchorLock.current = true;
+    setSendingAnchor(true);
+    setNotice("Checking the doctor, consent, and record before MetaMask opens.");
     try {
-      const prepared = await clinicalService.prepareAnchor(patientId.trim().toUpperCase(), record.id);
+      const ethereum = globalThis.window?.ethereum;
+      if (record.transaction) {
+        const saved = await clinicalService.recordAnchor(id, record.id, record.transaction);
+        await load(id);
+        if (saved.chainStatus === "anchored") {
+          setNotice("The record hash is anchored.");
+          return;
+        }
+        if (saved.chainStatus === "pending") {
+          setNotice("An anchor transaction is already pending for this version. No new transaction was sent.");
+          return;
+        }
+      }
+      await ensurePatientSepolia();
+      const nextChain = Number(await ethereum.request({ method: "eth_chainId" }));
+      setChainId(nextChain);
+      const target = transactionTarget("anchor", nextChain, import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
+      if (!target) throw Object.assign(new Error("Switch the wallet to Sepolia before anchoring. No transaction was sent."), { code: "wrong_network" });
+      const prepared = await clinicalService.prepareAnchor(id, record.id);
       const local = anchorCalldata({
         versionIndex: record.versionIndex,
         recordRef: record.recordRef,
@@ -110,18 +143,45 @@ export function ClinicalRecordScreen({ pageKey }) {
         contentHash: record.contentHash,
       });
       if (!local || local !== prepared.data || prepared.contentHash !== record.contentHash) {
-        setNotice("The prepared transaction did not match this record. Nothing was sent.");
-        return;
+        throw new Error("The prepared transaction did not match this record. No transaction was sent.");
       }
-      const hash = await sendPreparedTransaction({
-        chainId,
-        contractAddress: anchorTarget,
+      await previewAnchorTransaction({
+        chainId: nextChain,
+        contractAddress: target,
         data: local,
-        ethereum: globalThis.window?.ethereum,
+        from: walletAddress,
+        ethereum,
       });
-      setNotice(`The record hash was submitted by the clinical wallet. MetaMask approval was required. ${hash}`);
+      setNotice("Approve the anchor in MetaMask. It is not signed automatically.");
+      const hash = await sendPreparedTransaction({
+        chainId: nextChain,
+        contractAddress: target,
+        data: local,
+        ethereum,
+        from: walletAddress,
+      });
+      await clinicalService.recordAnchor(id, record.id, hash);
+      setNotice("Transaction submitted. Waiting for Sepolia confirmation.");
+      await waitForReceipt(ethereum, hash);
+      const saved = await clinicalService.recordAnchor(id, record.id, hash);
+      await load(id);
+      if (saved.chainStatus === "anchored") {
+        setNotice("The record hash is anchored.");
+      } else if (saved.chainStatus === "failed") {
+        setNotice("The transaction failed on Sepolia. The record was not anchored.");
+      } else {
+        setNotice("The transaction was submitted. Confirmation is still pending.");
+      }
     } catch (error) {
-      setNotice(error instanceof ApiError ? messageForRequest(error) : error?.message || "The anchor was not sent.");
+      const rejected = error?.code === 4001 || error?.code === "wallet_rejected";
+      setNotice(rejected
+        ? "MetaMask did not approve the request. Nothing was sent."
+        : error instanceof ApiError
+          ? messageForRequest(error)
+          : error?.message || "The anchor was not sent.");
+    } finally {
+      anchorLock.current = false;
+      setSendingAnchor(false);
     }
   }
 
@@ -212,14 +272,14 @@ export function ClinicalRecordScreen({ pageKey }) {
                   <span className="absolute top-1.5 -left-[1.45rem] h-2.5 w-2.5 rounded-full bg-teal" aria-hidden="true" />
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium text-navy">{CATEGORY_LABELS[record.category] || record.category}</p>
-                    <StatusBadge tone="warning">Consent required</StatusBadge>
+                    <StatusBadge tone={record.chainStatus === "anchored" ? "success" : "warning"}>{anchorLabel(record)}</StatusBadge>
                   </div>
                   <p className="mt-1 text-xs text-muted">{record.recordedOn} · version {record.versionIndex}</p>
                   <p className="mt-2 text-sm leading-6 text-ink">{Object.entries(record.content || {}).filter(([key]) => key !== "category" && key !== "recordedOn").map(([, value]) => value).join(" · ")}</p>
                   <p className="mt-1 break-all text-xs text-muted">{record.contentHash}</p>
                   {explorer ? <a className="mt-1 inline-flex break-all text-xs text-teal" href={explorer} target="_blank" rel="noreferrer">{record.transaction}</a> : <p className="mt-1 text-xs text-muted">No transaction reference.</p>}
-                  <Button className="mt-2" type="button" variant="secondary" disabled={!anchorAllowed || !walletAddress} onClick={() => anchorRecord(record)}>
-                    Anchor this version
+                  <Button className="mt-2" type="button" variant="secondary" loading={sendingAnchor} disabled={!walletAddress || sendingAnchor || record.chainStatus === "anchored"} onClick={() => anchorRecord(record)}>
+                    {record.chainStatus === "anchored" ? "Anchored" : "Anchor this version"}
                   </Button>
                 </li>
               );

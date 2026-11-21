@@ -32,7 +32,10 @@ function unavailable(fail) {
     listConsent: reject,
     listEmergency: reject,
     listAudit: reject,
-    hasChainRole: reject
+    hasChainRole: reject,
+    isActivePatient: reject,
+    getAccessExpiry: reject,
+    recordVersionCount: reject
   };
 }
 
@@ -119,6 +122,31 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
         "function hasRole(bytes32 role, address account) view returns (bool)"
       ], provider);
       return roles.hasRole(id(roleName), getAddress(account));
+    },
+    async isActivePatient(patientRef) {
+      const registry = new Contract(SEPOLIA.registry, ["function isActivePatient(bytes32 patientRef) view returns (bool)"], provider);
+      return registry.isActivePatient(patientRef);
+    },
+    async getAccessExpiry(patientRef, account) {
+      try {
+        return await (await scope()).access.getAccessExpiry(patientRef, account);
+      } catch (error) {
+        const data = String(error?.data || error?.info?.error?.data || error?.message || "");
+        if (data.toLowerCase().includes("noactivegrant") || data.includes("0x")) {
+          throw Object.assign(new Error("NoActiveGrant"), { code: "NO_GRANT" });
+        }
+        throw error;
+      }
+    },
+    async recordVersionCount(recordRef) {
+      const records = new Contract(SEPOLIA.medicalRecords, ["function versionCount(bytes32 recordRef) view returns (uint256)"], provider);
+      try {
+        return Number(await records.versionCount(recordRef));
+      } catch (error) {
+        const data = String(error?.data || error?.info?.error?.data || error?.message || "");
+        if (data.toLowerCase().includes("recordnotfound") || data.includes("0x3e07f1a1")) return 0;
+        throw error;
+      }
     },
     async hasAccess(patientRef, account) {
       return (await scope()).access.hasAccess(patientRef, account);

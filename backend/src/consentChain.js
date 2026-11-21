@@ -70,6 +70,56 @@ function decideClinicalAccess({ wallet, hospitalSigner, medicalStaff, hasAccess,
   throw httpError(CONSENT_REQUIRED, 403);
 }
 
+function assessAnchor(input = {}) {
+  const now = Number.isFinite(Number(input.nowSeconds)) ? Number(input.nowSeconds) : Math.floor(Date.now() / 1000);
+  const chainId = Number(input.chainId);
+  if (chainId !== 11155111 && chainId !== 31337) {
+    return { ok: false, status: 403, message: "Switch the wallet to Sepolia before anchoring. No transaction was sent." };
+  }
+  if (input.expectedContract && String(input.contractAddress || "").toLowerCase() !== String(input.expectedContract).toLowerCase()) {
+    return { ok: false, status: 403, message: "The record registry for this network is not the deployed MedChain contract. No transaction was sent." };
+  }
+  if (input.connectedWallet && input.wallet && getAddress(input.connectedWallet) !== getAddress(input.wallet)) {
+    return { ok: false, status: 403, message: "Switch MetaMask to the consented clinical wallet. No transaction was sent." };
+  }
+  if (!input.patientActive) {
+    return { ok: false, status: 403, message: "This patient is not an active registered record. No transaction was sent." };
+  }
+  const controller = typeof input.controller === "string" ? input.controller : "";
+  if (!/^0x[0-9a-fA-F]{40}$/.test(controller) || controller.toLowerCase() === "0x0000000000000000000000000000000000000000") {
+    return { ok: false, status: 403, message: "This patient has no wallet controller yet. No transaction was sent." };
+  }
+  if (!input.doctorRole) {
+    return { ok: false, status: 403, message: "This wallet does not have the Doctor role on Sepolia. No transaction was sent." };
+  }
+  if (input.preparedHash && input.contentHash && String(input.preparedHash).toLowerCase() !== String(input.contentHash).toLowerCase()) {
+    return { ok: false, status: 403, message: "The prepared record hash does not match this version. No transaction was sent." };
+  }
+  if (input.expectedCalldata && input.calldata && input.expectedCalldata !== input.calldata) {
+    return { ok: false, status: 403, message: "The prepared transaction did not match this record. No transaction was sent." };
+  }
+  if (input.chainStatus === "anchored" || Number(input.onChainVersions) > Number(input.versionIndex)) {
+    return { ok: false, status: 409, message: "This version is already anchored. No transaction was sent." };
+  }
+  if (input.pendingHash) {
+    return { ok: false, status: 409, message: "An anchor transaction is already pending for this version. No new transaction was sent." };
+  }
+  if (Number(input.onChainVersions) < Number(input.versionIndex)) {
+    return { ok: false, status: 409, message: "Anchor the previous version before this one. No transaction was sent." };
+  }
+  if (!input.hasAccess) {
+    if (input.grantExists === false) {
+      return { ok: false, status: 403, message: "This doctor does not have consent for this patient. No transaction was sent." };
+    }
+    const expiry = Number(input.expiresAt);
+    if (Number.isFinite(expiry) && expiry !== 0 && now >= expiry) {
+      return { ok: false, status: 403, message: "Patient consent for this doctor has expired. No transaction was sent." };
+    }
+    return { ok: false, status: 403, message: "Patient consent for this doctor was revoked. No transaction was sent." };
+  }
+  return { ok: true };
+}
+
 function permissionStatus(active, expiresAt, nowSeconds) {
   if (active) return "active";
   if (expiresAt && Number(expiresAt) !== 0 && nowSeconds >= Number(expiresAt)) return "expired";
@@ -94,6 +144,7 @@ module.exports = {
   revokeEmergencyCalldata,
   anchorCalldata,
   decideClinicalAccess,
+  assessAnchor,
   permissionStatus,
   httpError
 };

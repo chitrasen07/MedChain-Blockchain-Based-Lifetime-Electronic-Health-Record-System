@@ -34,6 +34,9 @@ function harness(state = {}) {
   };
   const chain = {
     hospital: Wallet.createRandom().address,
+    controller: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    active: true,
+    versions: 0,
     consent: new Set(),
     emergency: new Set(),
     medical: new Set(),
@@ -84,6 +87,13 @@ function harness(state = {}) {
     async getClinicalWallet(userId) {
       return sessions.get(userId) || null;
     },
+    async markMedicalRecordChain({ id, hospitalId, txHash, chainStatus }) {
+      const row = rows.find((item) => item.id === id && item.hospitalId === hospitalId);
+      if (!row || (row.txHash && row.txHash.toLowerCase() !== txHash.toLowerCase())) return null;
+      row.txHash = txHash;
+      row.chainStatus = chainStatus;
+      return row;
+    },
     async createAccessAudit(input) {
       calls.push("audit");
       audits.push(input);
@@ -120,8 +130,28 @@ function harness(state = {}) {
     async submitRegistration() {
       calls.push("submit");
     },
+    async confirmRecordAnchor() {
+      calls.push("receipt");
+      return chain.receipt || { status: "pending" };
+    },
     async getController() {
       calls.push("controller");
+      return chain.controller;
+    },
+    async isActivePatient() {
+      return chain.active !== false;
+    },
+    async hasChainRole(role, wallet) {
+      return role === "DOCTOR" && chain.medical.has(String(wallet).toLowerCase());
+    },
+    async recordVersionCount() {
+      return chain.versions;
+    },
+    async getAccessExpiry(_patientRef, wallet) {
+      if (!chain.consent.has(String(wallet).toLowerCase())) {
+        throw Object.assign(new Error("NoActiveGrant"), { code: "NO_GRANT" });
+      }
+      return chain.expiry ?? 0;
     }
   };
   const app = createApp({
@@ -199,7 +229,7 @@ test("consented clinical staff store an encrypted record and cannot broadcast th
   }));
   assert.equal(anchor.body.data.toLowerCase().includes(Buffer.from("Penicillin").toString("hex")), false);
   assert.equal(calls.includes("submit"), false);
-  assert.equal(calls.includes("controller"), false);
+  assert.equal(calls.includes("controller"), true);
 });
 
 test("missing, expired, and hospital-wallet authority cannot read or anchor a chart", async () => {
@@ -218,11 +248,17 @@ test("missing, expired, and hospital-wallet authority cannot read or anchor a ch
     .set("Authorization", `Bearer ${token(doctor)}`);
   assert.equal(denied.status, 403);
   assert.equal(denied.body.error, "Patient consent is required.");
+  chain.consent.add(doctorWallet.address.toLowerCase());
+  const created = await request(app)
+    .post("/patients/PATIENT-000001/records")
+    .set("Authorization", `Bearer ${token(doctor)}`)
+    .send({ category: "allergy", recordedOn: "2026-04-01", fields: { substance: "Penicillin" } });
+  chain.consent.delete(doctorWallet.address.toLowerCase());
   const anchor = await request(app)
-    .post("/patients/PATIENT-000001/records/11111111-1111-4111-8111-000000000001/anchor")
+    .post(`/patients/PATIENT-000001/records/${created.body.id}/anchor`)
     .set("Authorization", `Bearer ${token(doctor)}`);
   assert.equal(anchor.status, 403);
-  assert.equal(anchor.body.error, "The hospital wallet cannot anchor a medical record. Patient consent is required.");
+  assert.equal(anchor.body.error, "This doctor does not have consent for this patient. No transaction was sent.");
   chain.consent.add(chain.hospital.toLowerCase());
   chain.medical.add(chain.hospital.toLowerCase());
   const blocked = await request(app)
@@ -232,7 +268,7 @@ test("missing, expired, and hospital-wallet authority cannot read or anchor a ch
   assert.equal(blocked.status, 403);
   assert.equal(blocked.body.error, "The hospital signing wallet cannot grant, revoke, or use patient consent.");
   assert.equal(calls.includes("submit"), false);
-  assert.equal(calls.includes("create"), false);
+  assert.equal(calls.includes("create"), true);
 });
 
 test("emergency access is bounded, hashed, and cannot reveal the rest of the chart", async () => {
@@ -299,6 +335,49 @@ test("administrators, receptionists, and other hospitals cannot read or write cl
   assert.equal(desk.status, 403);
   assert.equal(administrator.status, 403);
   assert.equal(outside.status, 404);
+});
+
+test("anchor confirmation is saved once and a repeated send is refused", async () => {
+  const doctorWallet = Wallet.createRandom();
+  const tx = `0x${"44".repeat(32)}`;
+  const { app, calls, chain } = harness();
+  chain.medical.add(doctorWallet.address.toLowerCase());
+  chain.consent.add(doctorWallet.address.toLowerCase());
+  await bind(app, doctor, doctorWallet);
+  const created = await request(app)
+    .post("/patients/PATIENT-000001/records")
+    .set("Authorization", `Bearer ${token(doctor)}`)
+    .send({ category: "diagnosis", recordedOn: "2026-04-01", fields: { condition: "Example finding" } });
+  assert.equal(created.status, 201);
+  const path = `/patients/PATIENT-000001/records/${created.body.id}`;
+  chain.receipt = { status: "failed" };
+  const failed = await request(app)
+    .post(`${path}/anchor-result`)
+    .set("Authorization", `Bearer ${token(doctor)}`)
+    .send({ transaction: tx });
+  assert.equal(failed.status, 409);
+  chain.receipt = { status: "pending" };
+  const pending = await request(app)
+    .post(`${path}/anchor-result`)
+    .set("Authorization", `Bearer ${token(doctor)}`)
+    .send({ transaction: tx });
+  assert.equal(pending.body.chainStatus, "pending");
+  const duplicate = await request(app)
+    .post(`${path}/anchor`)
+    .set("Authorization", `Bearer ${token(doctor)}`);
+  assert.equal(duplicate.status, 409);
+  chain.receipt = { status: "confirmed" };
+  const confirmed = await request(app)
+    .post(`${path}/anchor-result`)
+    .set("Authorization", `Bearer ${token(doctor)}`)
+    .send({ transaction: tx });
+  assert.equal(confirmed.body.chainStatus, "anchored");
+  const again = await request(app)
+    .post(`${path}/anchor`)
+    .set("Authorization", `Bearer ${token(doctor)}`);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.includes("already anchored"), true);
+  assert.equal(calls.includes("submit"), false);
 });
 
 test("a record hash does not contain the clinical text", () => {

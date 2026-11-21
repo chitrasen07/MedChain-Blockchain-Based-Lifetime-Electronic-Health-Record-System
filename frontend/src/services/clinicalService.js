@@ -68,6 +68,12 @@ export const clinicalService = {
       body: {},
     });
   },
+  recordAnchor(patientId, recordId, transaction) {
+    return apiClient.request(`/patients/${encodeURIComponent(patientId)}/records/${encodeURIComponent(recordId)}/anchor-result`, {
+      method: "POST",
+      body: { transaction },
+    });
+  },
   prepareEmergency(patientId, body) {
     return apiClient.request(`/patients/${encodeURIComponent(patientId)}/emergency-access`, { method: "POST", body });
   },

@@ -445,6 +445,13 @@ function createDb(config) {
       }
       return result.rows[0];
     },
+    async markMedicalRecordChain({ id, hospitalId, txHash, chainStatus }) {
+      const result = await query(
+        "UPDATE medical_records SET tx_hash=$3, chain_status=$4 WHERE id=$1 AND hospital_id=$2 AND (tx_hash IS NULL OR lower(tx_hash)=lower($3)) RETURNING id, chain_status AS \"chainStatus\", tx_hash AS \"txHash\"",
+        [id, hospitalId, txHash, chainStatus]
+      );
+      return result.rows[0] || null;
+    },
     async getMedicalRecord(id, hospitalId) {
       const result = await query(
         "SELECT m.id,m.category,m.version_index AS \"versionIndex\",m.prior_record_id AS \"priorRecordId\",m.record_ref AS \"recordRef\",m.content_ciphertext AS \"contentCiphertext\",m.content_hash AS \"contentHash\",m.recorded_on AS \"recordedOn\",m.chain_status AS \"chainStatus\",m.tx_hash AS \"txHash\",p.patient_id AS \"publicPatientId\" FROM medical_records m JOIN patients p ON p.id=m.patient_id WHERE m.id=$1 AND m.hospital_id=$2",

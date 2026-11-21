@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
-const { Contract, FetchRequest, JsonRpcProvider, Wallet, id } = require("ethers");
-const { createConsentReads, unavailable } = require("./consentReader");
+const { Contract, FetchRequest, Interface, JsonRpcProvider, Wallet, getAddress, id } = require("ethers");
+const { SEPOLIA, createConsentReads, unavailable } = require("./consentReader");
 
 const DUPLICATE_COMMITMENT_SELECTOR = id("IdentityCommitmentAlreadyExists()").slice(0, 10);
 const ABI = [
@@ -51,6 +51,7 @@ function createDisabledBlockchainAdapter() {
     commitmentExists: reject,
     verifySigner: reject,
     getController: reject,
+    confirmRecordAnchor: reject,
     ...unavailable(blockchainUnavailable)
   };
 }
@@ -109,6 +110,22 @@ const provider = new JsonRpcProvider(request);
     },
     async getController(patientRef) {
       return reader.getController(patientRef);
+    },
+    async confirmRecordAnchor(txHash, recordRef, contentHash) {
+      const receipt = await provider.getTransactionReceipt(txHash);
+      if (!receipt) return { status: "pending", txHash };
+      const events = new Interface([
+        "event RecordVersionAppended(bytes32 indexed recordRef, bytes32 indexed patientRef, bytes32 recordHash, uint256 versionIndex, address indexed author)"
+      ]);
+      const match = receipt.status === 1 && receipt.to && getAddress(receipt.to) === getAddress(SEPOLIA.medicalRecords)
+        ? receipt.logs.map((log) => {
+          try { return events.parseLog(log); } catch { return null; }
+        }).find((parsed) => parsed
+          && parsed.name === "RecordVersionAppended"
+          && String(parsed.args.recordRef).toLowerCase() === String(recordRef).toLowerCase()
+          && String(parsed.args.recordHash).toLowerCase() === String(contentHash).toLowerCase())
+        : null;
+      return { status: match ? "confirmed" : "failed", txHash };
     },
     async getClaimDelay() {
       return Number(await contract.CLAIM_DELAY());

@@ -6,6 +6,7 @@ const { requireAuth } = require("./auth");
 const {
   ANCHOR_PREPARED,
   CONSENT_REQUIRED,
+  assessAnchor,
   EMERGENCY_CATEGORIES,
   EMERGENCY_COOLDOWN,
   EMERGENCY_LIMIT,
@@ -147,6 +148,48 @@ function todayUtc() {
   return new Date().toISOString().slice(0, 10);
 }
 
+async function anchorFacts(blockchain, patientRef, wallet, recordRef) {
+  const names = ["isActivePatient", "getController", "hasChainRole", "hasAccess", "getAccessExpiry", "recordVersionCount"];
+  if (names.some((name) => typeof blockchain?.[name] !== "function")) throw httpError("Service unavailable", 503);
+  const [patientActive, controller, doctorRole, hasAccess, onChainVersions] = await Promise.all([
+    blockchain.isActivePatient(patientRef),
+    blockchain.getController(patientRef),
+    blockchain.hasChainRole("DOCTOR", wallet),
+    blockchain.hasAccess(patientRef, wallet),
+    blockchain.recordVersionCount(recordRef)
+  ]);
+  let grantExists = true;
+  let expiresAt = null;
+  try {
+    const expiry = await blockchain.getAccessExpiry(patientRef, wallet);
+    expiresAt = expiry == null ? null : Number(expiry);
+  } catch (error) {
+    if (error?.code === "NO_GRANT" || error?.statusCode === 404) grantExists = false;
+    else throw httpError("Service unavailable", 503);
+  }
+  return {
+    chainId: 11155111,
+    patientActive: Boolean(patientActive),
+    controller,
+    doctorRole: Boolean(doctorRole),
+    hasAccess: Boolean(hasAccess),
+    grantExists,
+    expiresAt,
+    onChainVersions: Number(onChainVersions),
+    wallet
+  };
+}
+
+function anchorRecordFacts(record) {
+  return {
+    versionIndex: Number(record.versionIndex),
+    chainStatus: record.chainStatus,
+    pendingHash: record.txHash || "",
+    contentHash: record.contentHash,
+    preparedHash: record.contentHash
+  };
+}
+
 function registerClinicalRecords(app, { db, blockchain, config, authRateLimit }) {
   const clinical = requireAuth(
     config.jwtSecret,
@@ -282,15 +325,6 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
       const patient = await db.getPatient(req.params.patientId, req.user.hospital_id);
       if (!patient) return res.status(404).json({ error: "Patient not found" });
       const wallet = await boundWallet(db, req.user.sub);
-      let mode;
-      try {
-        mode = await clinicalMode(blockchain, patientReference(patient), wallet);
-      } catch (error) {
-        if (error.statusCode === 403 && error.message === CONSENT_REQUIRED) {
-          return res.status(403).json({ error: ANCHOR_REFUSAL });
-        }
-        throw error;
-      }
       if (getAddress(wallet) === getAddress(await blockchain.hospitalSigner())) {
         return res.status(403).json({ error: ANCHOR_REFUSAL });
       }
@@ -298,19 +332,19 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
       if (!record || record.publicPatientId !== patient.patientId) {
         return res.status(404).json({ error: "Patient not found" });
       }
-      if (mode === "emergency" && !EMERGENCY_CATEGORIES.has(record.category)) {
-        return res.status(403).json({ error: EMERGENCY_LIMIT });
-      }
       const patientRef = patientReference(patient);
+      const decision = assessAnchor({ ...(await anchorFacts(blockchain, patientRef, wallet, record.recordRef)), ...anchorRecordFacts(record) });
+      if (!decision.ok) return res.status(decision.status).json({ error: decision.message });
       res.json({
         broadcast: "disabled",
-        transaction: null,
+        transaction: record.txHash || null,
         anchoring: "prepared",
-        access: mode,
+        access: "consent",
         recordRef: record.recordRef,
         patientRef,
         contentHash: record.contentHash,
         versionIndex: record.versionIndex,
+        chainStatus: record.chainStatus,
         data: anchorCalldata({
           versionIndex: record.versionIndex,
           recordRef: record.recordRef,
@@ -319,6 +353,41 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
         }),
         message: ANCHOR_PREPARED
       });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/patients/:patientId/records/:recordId/anchor-result", clinical, async (req, res, next) => {
+    try {
+      const txHash = z.string().trim().regex(/^0x[0-9a-fA-F]{64}$/).parse(req.body?.transaction);
+      const patient = await db.getPatient(req.params.patientId, req.user.hospital_id);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      const wallet = await boundWallet(db, req.user.sub);
+      if (getAddress(wallet) === getAddress(await blockchain.hospitalSigner())) {
+        return res.status(403).json({ error: ANCHOR_REFUSAL });
+      }
+      const record = await db.getMedicalRecord(req.params.recordId, req.user.hospital_id);
+      if (!record || record.publicPatientId !== patient.patientId) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      if (record.chainStatus === "anchored") {
+        return res.json({ chainStatus: "anchored", transaction: record.txHash });
+      }
+      if (typeof blockchain.confirmRecordAnchor !== "function") throw httpError("Service unavailable", 503);
+      const receipt = await blockchain.confirmRecordAnchor(txHash, record.recordRef, record.contentHash);
+      if (receipt.status === "pending") {
+        if (typeof db.markMedicalRecordChain === "function") {
+          await db.markMedicalRecordChain({ id: record.id, hospitalId: req.user.hospital_id, txHash, chainStatus: "consent_required" });
+        }
+        return res.json({ chainStatus: "pending", transaction: txHash });
+      }
+      if (receipt.status !== "confirmed") {
+        return res.status(409).json({ error: "The transaction failed on Sepolia. The record was not anchored.", chainStatus: "failed" });
+      }
+      const saved = typeof db.markMedicalRecordChain === "function"
+        ? await db.markMedicalRecordChain({ id: record.id, hospitalId: req.user.hospital_id, txHash, chainStatus: "anchored" })
+        : { chainStatus: "anchored", txHash };
+      if (!saved) return res.status(409).json({ error: "This version is already anchored. No transaction was sent." });
+      res.json({ chainStatus: "anchored", transaction: saved.txHash || txHash });
     } catch (error) { next(error); }
   });
 
