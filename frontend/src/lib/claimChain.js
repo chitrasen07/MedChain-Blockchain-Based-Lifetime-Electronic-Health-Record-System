@@ -80,6 +80,23 @@ export function mergeClaimProgress(saved, chain) {
       message: "Transaction pending. The announce was submitted and is not confirmed yet. Do not send another one.",
     };
   }
+  if (chain?.onChainClaim === "instant") {
+    return {
+      patientId: chain.patientId || saved?.patientId || "",
+      walletAddress: chain.walletAddress || saved?.walletAddress || "",
+      patientRef: chain.patientRef || "",
+      onChainClaim: "instant",
+      claimMode: "instant",
+      canLink: chain.canLink === true,
+      canAnnounce: false,
+      canReveal: false,
+      message: chain.message || "",
+      registryAddress: chain.registryAddress || "",
+      typedData: chain.typedData || null,
+      announcedAt: 0,
+      delaySeconds: 0,
+    };
+  }
   if (chain?.announcedAt || chain?.onChainClaim === "complete" || chain?.onChainClaim === "wrong_wallet" || chain?.onChainClaim === "mismatch") {
     return {
       patientId: chain.patientId || saved?.patientId || "",

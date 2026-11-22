@@ -112,6 +112,27 @@ describe("clinical records and claims", () => {
     assert.equal(restored.announcedAt, 20);
     assert.equal(restored.canAnnounce, false);
     assert.equal(restored.message.includes("not submitted"), false);
+    const typedData = {
+      domain: { name: "MedChain Patient Registry", version: "2", chainId: 11155111, verifyingContract: "0xE2aF3A6f7FfB2152042c989594BF6Ca5c0aDe1BD" },
+      message: { patientRef: `0x${"11".repeat(32)}`, claimCommitment: `0x${"22".repeat(32)}` },
+    };
+    const instantProgress = mergeClaimProgress(
+      { recoveryCode: `0x${"aa".repeat(32)}`, announceTx: `0x${"ab".repeat(32)}` },
+      {
+        onChainClaim: "instant",
+        claimMode: "instant",
+        canLink: true,
+        patientRef: `0x${"11".repeat(32)}`,
+        registryAddress: "0xE2aF3A6f7FfB2152042c989594BF6Ca5c0aDe1BD",
+        typedData,
+        message: "Recovery code verified. Approve the wallet link in MetaMask.",
+      },
+    );
+    assert.equal(instantProgress.claimMode, "instant");
+    assert.equal(instantProgress.canLink, true);
+    assert.equal(instantProgress.typedData, typedData);
+    assert.equal(instantProgress.registryAddress, "0xE2aF3A6f7FfB2152042c989594BF6Ca5c0aDe1BD");
+    assert.equal(JSON.stringify(instantProgress).includes("aa".repeat(32)), false);
   });
 
   it("prepares consent and emergency calldata without the clinical reason", async () => {

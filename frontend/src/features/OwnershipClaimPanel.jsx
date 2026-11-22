@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { ApiError, apiClient } from "../lib/api";
@@ -20,6 +20,7 @@ import { claimStatusBody, patientAuthMessage } from "../services/patientPortal";
 
 function walletMessage(error) {
   if (error?.code === 4001) return "MetaMask did not approve the request. Nothing was sent.";
+  if (error?.code === -32002) return "A MetaMask request is already open. Finish or close it, then try again. Nothing new was sent.";
   return error?.message || "The claim was not sent.";
 }
 
@@ -37,6 +38,7 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
   const [busy, setBusy] = useState("");
   const [remaining, setRemaining] = useState(0);
   const [claim, setClaim] = useState(null);
+  const linkLock = useRef(false);
 
   useEffect(() => {
     const saved = loadClaimProgress();
@@ -104,7 +106,7 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
       delaySeconds: Number(next.claimDelaySeconds) || 0,
       onChainClaim: merged.onChainClaim || next.onChainClaim || "",
     });
-    return merged;
+    return { ...next, ...merged, typedData: next.typedData || null, registryAddress: next.registryAddress || "", claimMode: next.claimMode || merged.claimMode || "" };
   }
 
   async function readStatus(code) {
@@ -179,34 +181,50 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
   }
 
   async function linkNow() {
+    if (linkLock.current) return;
     const code = recoveryCode.trim();
+    const prepared = claim;
+    const ethereum = globalThis.window?.ethereum;
+    if (!ethereum?.request || !connected) {
+      setNotice("Wallet not connected. Install or open MetaMask. No transaction was sent.");
+      return;
+    }
+    if (!onSepolia) {
+      setNotice("Wrong network. Switch MetaMask to Sepolia. No transaction was sent.");
+      return;
+    }
+    if (prepared?.claimMode !== "instant" || !prepared.typedData || !prepared.patientRef || !prepared.registryAddress) {
+      setNotice("Check the recovery code again before linking. No transaction was sent.");
+      return;
+    }
+    if (!/^0x[0-9a-fA-F]{64}$/.test(code)) {
+      setNotice("Enter the recovery code again. It was not saved in this browser.");
+      return;
+    }
     if (!window.confirm("MetaMask will ask you to sign the wallet link, then approve one transaction. The recovery code is published in that transaction. Continue only if you approve that.")) return;
+    linkLock.current = true;
     setBusy("link");
-    setNotice("Awaiting MetaMask confirmation.");
+    setNotice("Approve the signature in MetaMask. Nothing is signed automatically.");
     try {
-      const current = await readStatus(code);
-      if (current.claimMode !== "instant" || !current.typedData) {
-        setNotice(current.message || "This record cannot be linked immediately.");
-        return;
-      }
-      const ethereum = globalThis.window.ethereum;
       const accounts = await ethereum.request({ method: "eth_requestAccounts" });
-      if (String(accounts?.[0] || "").toLowerCase() !== walletAddress.toLowerCase()) {
+      const account = accounts?.[0] || "";
+      if (account.toLowerCase() !== walletAddress.toLowerCase()) {
         setNotice("Connect the patient's own wallet. No transaction was sent.");
         return;
       }
       const signature = await ethereum.request({
         method: "eth_signTypedData_v4",
-        params: [accounts[0], JSON.stringify(current.typedData)],
+        params: [account, JSON.stringify(prepared.typedData)],
       });
+      setNotice("Approve the wallet-link transaction in MetaMask.");
       const hash = await sendInstantClaim({
-        patientRef: current.patientRef,
+        patientRef: prepared.patientRef,
         secret: code,
         signature,
-        registryAddress: current.registryAddress,
+        registryAddress: prepared.registryAddress,
         chainId: SEPOLIA_CHAIN_ID,
         ethereum,
-        from: walletAddress,
+        from: account,
       });
       setNotice("Transaction pending. Waiting for Sepolia confirmation. Do not send another link.");
       const receipt = await waitForReceipt(ethereum, hash, { attempts: 40 });
@@ -234,6 +252,7 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
     } catch (error) {
       setNotice(error instanceof ApiError ? patientAuthMessage(error) : walletMessage(error));
     } finally {
+      linkLock.current = false;
       setBusy("");
     }
   }
