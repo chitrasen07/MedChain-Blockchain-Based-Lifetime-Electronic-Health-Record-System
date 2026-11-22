@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
-import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, mergeClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim, transferCalldata } from "../src/lib/claimChain.js";
+import { claimBroadcastAllowed, claimCalldata, instantClaimCalldata, instantRegistryForChain, loadClaimProgress, mergeClaimProgress, remainingClaimSeconds, saveClaimProgress, sendInstantClaim, sendPatientClaim, transferCalldata } from "../src/lib/claimChain.js";
 import { SEPOLIA_MEDICAL_RECORDS, SEPOLIA_RECORD_ACCESS, anchorCalldata, emergencyRequestCalldata, grantCalldata, reasonHash, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../src/lib/consentChain.js";
 import { assignRoleCalldata, revokeRoleCalldata, sendRoleAssignment } from "../src/lib/roleChain.js";
 import { clinicalRequestBody } from "../src/services/clinicalService.js";
@@ -65,6 +65,18 @@ describe("clinical records and claims", () => {
     assert.equal(hash, `0x${"12".repeat(32)}`);
     assert.equal(calls.at(-1).method, "eth_sendTransaction");
     assert.equal(calls.at(-1).params[0].to, "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806");
+    const signature = `0x${"ab".repeat(65)}`;
+    const instant = new Interface(["function claimController(bytes32 patientRef, bytes32 secret, bytes signature)"]);
+    assert.equal(instantClaimCalldata(patientRef, value, signature), instant.encodeFunctionData("claimController", [patientRef, value, signature]));
+    assert.equal(instantRegistryForChain(11155111, "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806"), "");
+    await assert.rejects(() => sendInstantClaim({
+      patientRef,
+      secret: value,
+      signature,
+      registryAddress: "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806",
+      chainId: 11155111,
+      ethereum,
+    }), /not active/);
     let blocked = false;
     await assert.rejects(
       () => sendPatientClaim({

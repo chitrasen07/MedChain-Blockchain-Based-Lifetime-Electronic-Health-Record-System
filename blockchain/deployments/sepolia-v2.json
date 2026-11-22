@@ -1,0 +1,13 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "deployer": "0xD272a1e1027CDCDeA3ebbB8A9D01977e2030547F",
+  "previousPatientRegistry": "0xDe1501AF8BACc3c1040788AFb8d2f784Ab8e2806",
+  "contracts": {
+    "PatientRegistryV2": "0xE2aF3A6f7FfB2152042c989594BF6Ca5c0aDe1BD",
+    "RecordAccessControlV2": "0xB914033Add7bC3C1e8e77f61BE7AB089C6801962",
+    "EmergencyAccessV2": "0xe9db76F4EBCe58C24e4BA66083eA75Dc90526Cd3",
+    "MedicalRecordRegistryV2": "0xF5069561ADE26434baA789dc7C6A4DfD8915dF79"
+  },
+  "migration": "not-run"
+}

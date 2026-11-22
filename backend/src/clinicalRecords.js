@@ -450,7 +450,10 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
           patientRef,
           contentHash: record.contentHash
         }),
-        message: ANCHOR_PREPARED
+        message: ANCHOR_PREPARED,
+        contractAddress: typeof blockchain.locatePatient === "function"
+          ? (await blockchain.locatePatient(patientRef)).medicalRecords
+          : null
       });
     } catch (error) { next(error); }
   });

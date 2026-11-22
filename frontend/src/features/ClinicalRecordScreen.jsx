@@ -9,7 +9,7 @@ import { Select } from "../components/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { ApiError, messageForRequest } from "../lib/api";
 import { SEPOLIA_CHAIN_ID, waitForReceipt } from "../lib/claimChain";
-import { anchorCalldata, previewAnchorTransaction, sendPreparedTransaction, transactionTarget } from "../lib/consentChain";
+import { anchorCalldata, contractForPatient, previewAnchorTransaction, sendPreparedTransaction } from "../lib/consentChain";
 import { ensurePatientSepolia } from "../lib/patientWallet";
 import { sepoliaTransactionUrl } from "../lib/ownership";
 import { pageChrome } from "../lib/pageChrome";
@@ -149,9 +149,9 @@ export function ClinicalRecordScreen({ pageKey, canWrite = true, canAnchor = tru
       await ensurePatientSepolia();
       const nextChain = Number(await ethereum.request({ method: "eth_chainId" }));
       setChainId(nextChain);
-      const target = transactionTarget("anchor", nextChain, import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
-      if (!target) throw Object.assign(new Error("Switch the wallet to Sepolia before anchoring. No transaction was sent."), { code: "wrong_network" });
       const prepared = await clinicalService.prepareAnchor(id, record.id);
+      const target = contractForPatient("anchor", nextChain, prepared.contractAddress || "", import.meta.env?.VITE_LOCAL_MEDICAL_RECORD_REGISTRY);
+      if (!target) throw Object.assign(new Error("This record's registry is not available for anchoring in this deployment. No transaction was sent."), { code: "wrong_network" });
       const local = anchorCalldata({
         versionIndex: record.versionIndex,
         recordRef: record.recordRef,

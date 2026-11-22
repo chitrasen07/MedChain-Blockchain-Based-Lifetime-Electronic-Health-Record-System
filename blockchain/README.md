@@ -65,7 +65,8 @@ Hospital administrators call `registerPatient(bytes32 patientRef, address contro
 - `identityCommitment` is required. There is no registration path without one, and a commitment can belong to only one patient reference.
 - Set `controller` to the patient's wallet and `claimCommitment` to zero when the patient has a wallet.
 - Set `controller` to the zero address and `claimCommitment` to `keccak256(abi.encode(secret, CLAIM_DOMAIN))` when the patient has no wallet. The hospital never receives a wallet key and cannot later choose the controller.
-- The patient later calls `announceControllerClaim` and, after one hour, `revealControllerClaim`. The secret and the claimant address are bound together, so a copied transaction cannot choose a different wallet.
+- PatientRegistryV2 registers the same way and the patient calls `claimController` immediately. The wallet signs the patient reference and recovery commitment, so a copied transaction cannot choose a different wallet. There is no claim delay on that contract.
+- A patient who is still only on the original PatientRegistry calls `announceControllerClaim` and, after one hour, `revealControllerClaim`. That delay is unchanged until that patient is copied by the explicit migration script.
 - The current controller proposes a transfer. The new controller must accept it.
 - Recovery uses the same delay. The controller sets `keccak256(abi.encode(secret, RECOVERY_DOMAIN))` in advance. Without that commitment, a lost controller cannot be replaced by the hospital.
 

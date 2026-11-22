@@ -245,7 +245,35 @@ function profileFields(value) {
   return profile;
 }
 
+function instantTypedData(registryAddress, patientRef, claimCommitment, chainId) {
+  return {
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" }
+      ],
+      ClaimController: [
+        { name: "patientRef", type: "bytes32" },
+        { name: "claimCommitment", type: "bytes32" }
+      ]
+    },
+    primaryType: "ClaimController",
+    domain: {
+      name: "MedChain Patient Registry",
+      version: "2",
+      chainId: Number(chainId) || 11155111,
+      verifyingContract: registryAddress
+    },
+    message: { patientRef, claimCommitment }
+  };
+}
+
 function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
+  app.get("/patient-auth/claim-mode", (_req, res) => {
+    res.json({ instant: Boolean(config.instantRegistry) });
+  });
   const patient = requirePatient(config.jwtSecret, {
     loadPatient: (id) => db.getPatientForAuth(id)
   });
@@ -310,7 +338,11 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const record = await db.findConfirmedPatientForAuth(input.patientId);
       if (!record?.did) throw signInRejected();
       const facts = await ownershipFacts(db, blockchain, record, walletAddress);
-      const announcement = facts.controller === ZERO_ADDRESS ? await readAnnouncement(blockchain, record.did) : null;
+      const located = facts.controller === ZERO_ADDRESS && typeof blockchain.locatePatient === "function"
+        ? await blockchain.locatePatient(record.did)
+        : null;
+      const instant = located?.claimMode === "instant";
+      const announcement = facts.controller === ZERO_ADDRESS && !instant ? await readAnnouncement(blockchain, record.did) : null;
       const timing = announcement?.announced ? await readClaimTiming(blockchain) : { claimDelaySeconds: CLAIM_DELAY_SECONDS, claimWindowSeconds: CLAIM_WINDOW_SECONDS };
       const claim = facts.controller === ZERO_ADDRESS
         ? describeClaimState({ controller: facts.controller, walletAddress, announcement, ...timing })
@@ -323,13 +355,16 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         label: facts.controller === ZERO_ADDRESS ? "Registered — Wallet linking pending" : "Registered — Wallet linked",
         staffControlled: facts.staffControlled,
         walletIsController: facts.walletIsController,
-        onChainClaim: claim?.onChainClaim || (facts.controller === ZERO_ADDRESS ? "not_submitted" : "complete"),
+        claimMode: instant ? "instant" : (facts.controller === ZERO_ADDRESS ? "legacy" : "linked"),
+        onChainClaim: instant ? "instant" : (claim?.onChainClaim || (facts.controller === ZERO_ADDRESS ? "not_submitted" : "complete")),
         announcedAt: claim?.announcedAt || 0,
         remainingSeconds: claim?.remainingSeconds || 0,
         canReveal: claim?.canReveal === true,
         message: facts.staffControlled
           ? STAFF_CONTROLLER
-          : facts.controller === ZERO_ADDRESS
+          : instant
+            ? "This record can be linked immediately. Check the recovery code, then approve the wallet link."
+            : facts.controller === ZERO_ADDRESS
             ? unclaimedMessage
             : facts.walletIsController
               ? "Patient ownership verified."
@@ -368,7 +403,29 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const record = await db.findConfirmedPatientForAuth(input.patientId);
       const stored = claimCommitmentFrom(record?.registrationController);
       if (!record?.did || !stored || !sameBytes32(stored, input.claimCommitment)) throw ownershipRejected();
-      const controller = await readController(blockchain, record.did);
+      const located = typeof blockchain.locatePatient === "function" ? await blockchain.locatePatient(record.did) : null;
+      if (located?.claimMode === "instant") {
+        if (await controllerRole(db, blockchain, walletAddress.toLowerCase())) {
+          return res.status(409).json({ error: STAFF_OWNER });
+        }
+        return res.json({
+          claimMode: "instant",
+          onChainClaim: "instant",
+          canLink: true,
+          canAnnounce: false,
+          canReveal: false,
+          remainingSeconds: 0,
+          announcedAt: 0,
+          message: "Recovery code verified. Approve the wallet link in MetaMask. It is recorded immediately.",
+          patientId: record.patientId,
+          patientRef: record.did,
+          walletAddress: walletAddress.toLowerCase(),
+          commitmentMatches: true,
+          registryAddress: located.registryAddress,
+          typedData: instantTypedData(located.registryAddress, record.did, stored, config.chainId)
+        });
+      }
+      const controller = located?.controller || await readController(blockchain, record.did);
       const announcement = await readAnnouncement(blockchain, record.did);
       const timing = await readClaimTiming(blockchain);
       const claim = describeClaimState({
@@ -381,6 +438,7 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       });
       res.json({
         ...claim,
+        claimMode: "legacy",
         patientId: record.patientId,
         patientRef: record.did,
         walletAddress,
@@ -393,7 +451,8 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
 
   app.get("/patient-portal/identity", patient, async (req, res, next) => {
     try {
-      const controller = await readController(blockchain, req.patient.did);
+      const located = typeof blockchain.locatePatient === "function" ? await blockchain.locatePatient(req.patient.did) : null;
+      const controller = located?.controller || await readController(blockchain, req.patient.did);
       res.json({
         patientId: req.patient.patientId,
         patientRef: req.patient.did,
@@ -403,7 +462,10 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         walletAddress: req.patient.walletAddress,
         controller: getAddress(controller),
         ownership: controller === ZERO_ADDRESS ? "unclaimed" : "controller",
-        onChainClaim: controller === ZERO_ADDRESS ? "not_submitted" : "complete"
+        onChainClaim: controller === ZERO_ADDRESS ? "not_submitted" : "complete",
+        claimMode: located?.claimMode || (controller === ZERO_ADDRESS ? "legacy" : "linked"),
+        recordAccessAddress: located?.recordAccess || null,
+        medicalRecordAddress: located?.medicalRecords || null
       });
     } catch (error) { next(error); }
   });

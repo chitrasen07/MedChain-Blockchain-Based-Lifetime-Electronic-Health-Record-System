@@ -9,6 +9,7 @@ const ABI = [
   "function identityCommitmentExists(bytes32 identityCommitment) view returns (bool)",
   "function patientForCommitment(bytes32 identityCommitment) view returns (bytes32)",
   "function getController(bytes32 patientRef) view returns (address)",
+  "function patientExists(bytes32 patientRef) view returns (bool)",
   "function CLAIM_DELAY() view returns (uint256)",
   "function CLAIM_WINDOW() view returns (uint256)",
   "error IdentityCommitmentAlreadyExists()",
@@ -75,6 +76,52 @@ const provider = new JsonRpcProvider(request);
   const wallet = new Wallet(config.privateKey, provider);
   const contract = new Contract(config.registryAddress, ABI, wallet);
   const reader = new Contract(config.registryAddress, ABI, provider);
+  const instantAbi = [
+    ...ABI,
+    "function claimController(bytes32 patientRef,bytes32 secret,bytes signature)"
+  ];
+  const instant = config.instantRegistry?.registry
+    ? {
+      address: config.instantRegistry.registry,
+      reader: new Contract(config.instantRegistry.registry, instantAbi, provider),
+      writer: new Contract(config.instantRegistry.registry, instantAbi, wallet),
+      recordAccess: config.instantRegistry.recordAccess,
+      emergency: config.instantRegistry.emergency,
+      medicalRecords: config.instantRegistry.medicalRecords
+    }
+    : null;
+  const zeroAddress = "0x0000000000000000000000000000000000000000";
+  async function locatePatient(patientRef) {
+    if (instant && await instant.reader.patientExists(patientRef)) {
+      const controller = await instant.reader.getController(patientRef);
+      const linked = String(controller).toLowerCase() !== zeroAddress;
+      return {
+        version: "v2",
+        controller,
+        claimMode: linked ? "linked" : "instant",
+        registryAddress: instant.address,
+        recordAccess: instant.recordAccess,
+        emergency: instant.emergency,
+        medicalRecords: instant.medicalRecords
+      };
+    }
+    if (await reader.patientExists(patientRef)) {
+      const controller = await reader.getController(patientRef);
+      const linked = String(controller).toLowerCase() !== zeroAddress;
+      return {
+        version: "v1",
+        controller,
+        claimMode: linked ? "linked" : "legacy",
+        registryAddress: config.registryAddress,
+        recordAccess: SEPOLIA.recordAccess,
+        emergency: SEPOLIA.emergency,
+        medicalRecords: SEPOLIA.medicalRecords
+      };
+    }
+    const missing = new Error("Patient not found");
+    missing.statusCode = 404;
+    throw missing;
+  }
   const parseReceipt = (receipt) => {
     const event = receipt.logs.map((log) => {
       try { return contract.interface.parseLog(log); } catch { return null; }
@@ -94,7 +141,8 @@ const provider = new JsonRpcProvider(request);
     },
     async submitRegistration(patientRef, controller, commitment, claimCommitment) {
       try {
-        const tx = await contract.registerPatient(patientRef, controller, commitment, claimCommitment);
+        const destination = instant ? instant.writer : contract;
+        const tx = await destination.registerPatient(patientRef, controller, commitment, claimCommitment);
         return { txHash: tx.hash };
       } catch (error) {
         if (duplicateCommitmentConflict(error)) throw duplicateCommitmentError();
@@ -108,10 +156,14 @@ const provider = new JsonRpcProvider(request);
       return { status: "confirmed", ...parseReceipt(receipt) };
     },
     async commitmentExists(commitment) {
-      return contract.identityCommitmentExists(commitment);
+      if (instant && await instant.reader.identityCommitmentExists(commitment)) return true;
+      return reader.identityCommitmentExists(commitment);
+    },
+    async locatePatient(patientRef) {
+      return locatePatient(patientRef);
     },
     async getController(patientRef) {
-      return reader.getController(patientRef);
+      return (await locatePatient(patientRef)).controller;
     },
     async confirmRecordAnchor(txHash, recordRef, contentHash) {
       const receipt = await provider.getTransactionReceipt(txHash);
@@ -163,7 +215,15 @@ const provider = new JsonRpcProvider(request);
       provider,
       registryAddress: config.registryAddress,
       signerAddress: wallet.address,
-      fail: blockchainUnavailable
+      fail: blockchainUnavailable,
+      instant: instant
+        ? {
+          registry: instant.address,
+          recordAccess: instant.recordAccess,
+          emergency: instant.emergency,
+          medicalRecords: instant.medicalRecords
+        }
+        : null
     })
   };
 }

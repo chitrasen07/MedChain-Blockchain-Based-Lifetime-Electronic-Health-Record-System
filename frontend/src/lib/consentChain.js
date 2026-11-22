@@ -1,6 +1,7 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { LOCAL_CLAIM_CHAIN_ID, SEPOLIA_CHAIN_ID } from "./claimChain.js";
+import { INSTANT_MEDICAL_RECORDS, INSTANT_RECORD_ACCESS } from "./instantRegistry.js";
 
 function selector(signature) {
   const hash = keccak_256(new TextEncoder().encode(signature));
@@ -70,6 +71,20 @@ export function transactionTarget(action, chainId, localAddress = "") {
   return "";
 }
 
+function permittedSepolia(kind, address) {
+  const extra = kind === "consent" ? INSTANT_RECORD_ACCESS : kind === "anchor" ? INSTANT_MEDICAL_RECORDS : "";
+  const base = kind === "consent" ? SEPOLIA_RECORD_ACCESS : kind === "anchor" ? SEPOLIA_MEDICAL_RECORDS : "";
+  return [base, extra].some((item) => /^0x[0-9a-fA-F]{40}$/.test(item || "") && item.toLowerCase() === String(address || "").toLowerCase());
+}
+
+export function contractForPatient(action, chainId, patientContract = "", localAddress = "") {
+  const fallback = transactionTarget(action, chainId, localAddress);
+  if (Number(chainId) !== SEPOLIA_CHAIN_ID) return fallback;
+  const kind = action === "consent" ? "consent" : action === "anchor" ? "anchor" : "";
+  if (!patientContract) return fallback;
+  return permittedSepolia(kind, patientContract) ? patientContract : "";
+}
+
 function sepoliaDestination(data) {
   const chosen = String(data || "").slice(0, 10).toLowerCase();
   if (CONSENT_SELECTORS.has(chosen)) return SEPOLIA_RECORD_ACCESS;
@@ -99,7 +114,7 @@ function assertAnchorDestination(chainId, contractAddress, data) {
   const address = String(contractAddress || "");
   if (chain === SEPOLIA_CHAIN_ID) {
     const destination = sepoliaDestination(data);
-    if (destination !== SEPOLIA_MEDICAL_RECORDS || address.toLowerCase() !== destination.toLowerCase()) {
+    if (destination !== SEPOLIA_MEDICAL_RECORDS || !permittedSepolia("anchor", address)) {
       throw Object.assign(new Error("The record registry for this network is not the deployed MedChain contract. No transaction was sent."), { code: "broadcast_blocked" });
     }
     return;
@@ -136,7 +151,8 @@ export async function sendPreparedTransaction({ chainId, contractAddress, data, 
   const address = String(contractAddress || "");
   if (chain === SEPOLIA_CHAIN_ID) {
     const destination = sepoliaDestination(data);
-    if (!destination || address.toLowerCase() !== destination.toLowerCase()) {
+    const kind = CONSENT_SELECTORS.has(String(data || "").slice(0, 10).toLowerCase()) ? "consent" : "anchor";
+    if (!destination || !permittedSepolia(kind, address)) {
       throw Object.assign(new Error("This Sepolia transaction is not one of the approved consent or record actions."), { code: "broadcast_blocked" });
     }
   } else if (chain !== LOCAL_CLAIM_CHAIN_ID || !/^0x[0-9a-fA-F]{40}$/.test(address) || !/^0x[0-9a-fA-F]{8,}$/.test(data || "")) {

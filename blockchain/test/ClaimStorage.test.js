@@ -8,12 +8,14 @@ describe("claim storage", function () {
     const ctx = await deploySystem();
     const patientRef = ethers.hexlify(ethers.randomBytes(32));
     const secret = ethers.hexlify(ethers.randomBytes(32));
+    const identity = ethers.hexlify(ethers.randomBytes(32));
+    const commitment = claimCommitment(secret);
     const sealed = sealedClaim(ctx.patient.address, secret, patientRef);
     await ctx.patientRegistry.connect(ctx.hospitalAdmin).registerPatient(
       patientRef,
       ethers.ZeroAddress,
-      ethers.hexlify(ethers.randomBytes(32)),
-      claimCommitment(secret)
+      identity,
+      commitment
     );
     const tx = await ctx.patientRegistry.connect(ctx.patient).announceControllerClaim(patientRef, sealed);
     const receipt = await tx.wait();
@@ -29,6 +31,8 @@ describe("claim storage", function () {
     expect(announcement.claimant).to.equal(ctx.patient.address);
     expect(announcement.announcedAt).to.equal(block.timestamp);
     expect(announcement.pendingClaimHash).to.equal(sealed);
+    expect(await ethers.provider.getStorage(registry, slots.identity)).to.equal(identity);
+    expect(await ethers.provider.getStorage(registry, slots.claim)).to.equal(commitment);
     expect(await ctx.patientRegistry.CLAIM_DELAY()).to.equal(3600);
     expect(await ctx.patientRegistry.CLAIM_WINDOW()).to.equal(86400);
   });

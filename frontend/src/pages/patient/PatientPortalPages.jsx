@@ -12,7 +12,7 @@ import { StatusBadge } from "../../components/StatusBadge";
 import { VerificationNotice } from "../../components/VerificationNotice";
 import { ApiError, apiClient, messageForRequest } from "../../lib/api";
 import { claimBroadcastAllowed, sendPatientClaim, waitForReceipt } from "../../lib/claimChain";
-import { grantCalldata, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../../lib/consentChain";
+import { contractForPatient, grantCalldata, revokeCalldata, sendPreparedTransaction } from "../../lib/consentChain";
 import { ensurePatientSepolia } from "../../lib/patientWallet";
 import { claimCommitmentForRecoveryCode, sealedClaimForRecoveryCode, sepoliaTransactionUrl } from "../../lib/ownership";
 import { useAuth } from "../../context/useAuth";
@@ -502,7 +502,7 @@ export function PatientAccessPage() {
       setTx({ action, wallet, phase: "pending", hash: "", message: "Approve the transaction in MetaMask. It is not signed automatically." });
       await ensurePatientSepolia();
       const nextChain = Number(await ethereum.request({ method: "eth_chainId" }));
-      const target = transactionTarget("consent", nextChain, import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
+      const target = contractForPatient("consent", nextChain, state.data?.recordAccessAddress || "", import.meta.env?.VITE_LOCAL_RECORD_ACCESS);
       if (!target || !data) throw new Error("The consent transaction could not be prepared.");
       const hash = await sendPreparedTransaction({ chainId: nextChain, contractAddress: target, data, ethereum });
       setTx({ action, wallet, phase: "pending", hash, message: "Transaction submitted. Waiting for Sepolia confirmation." });

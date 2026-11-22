@@ -11,6 +11,7 @@ import {
   readClaimDelay,
   remainingClaimSeconds,
   saveClaimProgress,
+  sendInstantClaim,
   sendPatientClaim,
   waitForReceipt,
 } from "../lib/claimChain";
@@ -121,7 +122,7 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
     });
     let next = result;
     const ethereum = globalThis.window?.ethereum;
-    if (ethereum?.request && onSepolia && result?.onChainClaim !== "complete") {
+    if (ethereum?.request && onSepolia && result?.claimMode !== "instant" && result?.onChainClaim !== "complete") {
       try {
         const contractDelay = await readClaimDelay(ethereum, SEPOLIA_PATIENT_REGISTRY);
         if (contractDelay) next = { ...result, claimDelaySeconds: contractDelay };
@@ -172,6 +173,66 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
       setNotice(merged.message || "Recovery code valid. No transaction was sent.");
     } catch (error) {
       setNotice(error instanceof ApiError ? patientAuthMessage(error) : "The ownership check could not be completed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function linkNow() {
+    const code = recoveryCode.trim();
+    if (!window.confirm("MetaMask will ask you to sign the wallet link, then approve one transaction. The recovery code is published in that transaction. Continue only if you approve that.")) return;
+    setBusy("link");
+    setNotice("Awaiting MetaMask confirmation.");
+    try {
+      const current = await readStatus(code);
+      if (current.claimMode !== "instant" || !current.typedData) {
+        setNotice(current.message || "This record cannot be linked immediately.");
+        return;
+      }
+      const ethereum = globalThis.window.ethereum;
+      const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+      if (String(accounts?.[0] || "").toLowerCase() !== walletAddress.toLowerCase()) {
+        setNotice("Connect the patient's own wallet. No transaction was sent.");
+        return;
+      }
+      const signature = await ethereum.request({
+        method: "eth_signTypedData_v4",
+        params: [accounts[0], JSON.stringify(current.typedData)],
+      });
+      const hash = await sendInstantClaim({
+        patientRef: current.patientRef,
+        secret: code,
+        signature,
+        registryAddress: current.registryAddress,
+        chainId: SEPOLIA_CHAIN_ID,
+        ethereum,
+        from: walletAddress,
+      });
+      setNotice("Transaction pending. Waiting for Sepolia confirmation. Do not send another link.");
+      const receipt = await waitForReceipt(ethereum, hash, { attempts: 40 });
+      if (!receipt) {
+        setNotice("Transaction pending. The wallet link was submitted. Check again after Sepolia confirms it. Do not create another Patient ID.");
+        return;
+      }
+      if (receipt.status === "0x0") {
+        setNotice("The wallet link reverted. Sign-in stays unavailable. Check the wallet, network, and recovery code.");
+        return;
+      }
+      setRecoveryCode("");
+      const ownership = await apiClient.request("/patient-auth/ownership-status", {
+        method: "POST",
+        body: { patientId: id, walletAddress },
+        authenticated: false,
+      });
+      if (ownership?.walletIsController) {
+        setClaim({ onChainClaim: "complete", claimMode: "linked", canAnnounce: false, canReveal: false, message: ownership.message });
+        setNotice("Wallet linked successfully. This patient can sign in with this wallet.");
+        onLinked?.(ownership);
+      } else {
+        setNotice(ownership?.message || "The link was confirmed. Check wallet status, then sign in with this wallet.");
+      }
+    } catch (error) {
+      setNotice(error instanceof ApiError ? patientAuthMessage(error) : walletMessage(error));
     } finally {
       setBusy("");
     }
@@ -278,6 +339,8 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
     }
   }
 
+  const instant = claim?.claimMode === "instant";
+  const canLink = instant && claim?.canLink === true && onSepolia && /^0x[0-9a-fA-F]{64}$/.test(recoveryCode.trim());
   const announceUrl = sepoliaTransactionUrl(announceTx);
   const revealUrl = sepoliaTransactionUrl(revealTx);
   const statusLine = !connected
@@ -294,13 +357,16 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
     <form className="rounded-xl border border-line bg-surface px-5 py-6 sm:px-7" onSubmit={checkRecovery} noValidate>
       <h2 className="text-base font-semibold text-navy">Link a wallet to a record created without one</h2>
       <p className="mt-2 text-sm leading-6 text-muted">
-        Use the same lifetime Patient ID. Do not register again. The deployed Sepolia contract requires one hour after a confirmed announce before reveal. A wallet connected during hospital registration does not use this wait.
+        Use the same lifetime Patient ID. Do not register again. {instant
+          ? "This record can be linked immediately. One MetaMask approval binds this wallet."
+          : "A record still on the original registry keeps the one-hour announce and reveal wait. This page does not hide that wait."}
       </p>
       <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-muted">
         <li>On this computer, connect the patient's own MetaMask account on Sepolia.</li>
-        <li>Enter the Patient ID and recovery code. The code stays in this browser.</li>
-        <li>If no announce is on chain, approve one announce transaction.</li>
-        <li>When the contract waiting period ends, reveal, then sign in with this wallet.</li>
+        <li>Enter the Patient ID and recovery code. The code stays in this browser until the link is sent.</li>
+        {instant
+          ? <li>Approve the wallet link, then sign in with this wallet.</li>
+          : <li>If this record is still on the original registry, announce once, wait for the contract period, then reveal.</li>}
       </ol>
       <div className="mt-4 space-y-4">
         <Input
@@ -324,8 +390,9 @@ export function OwnershipClaimPanel({ patientId, walletAddress, onLinked }) {
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button type="button" variant="secondary" onClick={useSepolia} loading={busy === "network"} disabled={Boolean(busy) || onSepolia}>Use Sepolia</Button>
           <Button type="submit" variant="secondary" loading={busy === "check"} disabled={Boolean(busy)}>Check recovery code</Button>
-          <Button type="button" variant="secondary" onClick={announce} loading={busy === "announce"} disabled={Boolean(busy) || !onSepolia || !canAnnounce}>Announce ownership claim</Button>
-          <Button type="button" onClick={reveal} loading={busy === "reveal"} disabled={Boolean(busy) || !onSepolia || !canReveal}>Reveal ownership claim</Button>
+          {instant ? <Button type="button" onClick={linkNow} loading={busy === "link"} disabled={Boolean(busy) || !canLink}>Verify and link wallet</Button> : null}
+          {instant ? null : <Button type="button" variant="secondary" onClick={announce} loading={busy === "announce"} disabled={Boolean(busy) || !onSepolia || !canAnnounce}>Announce ownership claim</Button>}
+          {instant ? null : <Button type="button" onClick={reveal} loading={busy === "reveal"} disabled={Boolean(busy) || !onSepolia || !canReveal}>Reveal ownership claim</Button>}
         </div>
       </div>
     </form>

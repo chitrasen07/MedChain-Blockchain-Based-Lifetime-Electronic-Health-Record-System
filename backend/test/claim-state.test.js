@@ -135,3 +135,52 @@ test("claim status reports a confirmed announce instead of saying nothing was su
   assert.equal(ownership.body.onChainClaim, "ready");
   assert.match(ownership.body.message, /Ready to reveal/);
 });
+
+test("an instant-claim record links without a waiting period and rejects a staff wallet", async () => {
+  const signer = Wallet.createRandom();
+  const registry = "0x" + "12".repeat(20);
+  const db = {
+    async findConfirmedPatientForAuth() {
+      return {
+        id: "patient-b",
+        patientId: "PATIENT-000004",
+        did: ref,
+        status: "confirmed",
+        registrationController: `unclaimed:${claim}`
+      };
+    }
+  };
+  const instant = {
+    async locatePatient() {
+      return { claimMode: "instant", controller: ZERO, registryAddress: registry, version: "v2" };
+    },
+    async hospitalSigner() { return signer.address; }
+  };
+  const app = createApp({ db, blockchain: instant, config: { corsOrigin: false, jwtSecret: secret, piiEncryptionKey: "11".repeat(32), chainId: 11155111 } });
+  const blocked = await request(app).post("/patient-auth/claim-status").send({
+    patientId: "PATIENT-000004",
+    walletAddress: signer.address,
+    claimCommitment: claim
+  });
+  assert.equal(blocked.status, 409);
+
+  const patient = Wallet.createRandom();
+  const open = createApp({
+    db,
+    blockchain: { ...instant, async hospitalSigner() { return signer.address; } },
+    config: { corsOrigin: false, jwtSecret: secret, piiEncryptionKey: "11".repeat(32), chainId: 11155111 }
+  });
+  const response = await request(open).post("/patient-auth/claim-status").send({
+    patientId: "PATIENT-000004",
+    walletAddress: patient.address,
+    claimCommitment: claim
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.claimMode, "instant");
+  assert.equal(response.body.canLink, true);
+  assert.equal(response.body.remainingSeconds, 0);
+  assert.equal(response.body.typedData.primaryType, "ClaimController");
+  assert.equal(response.body.typedData.message.claimCommitment, claim);
+  assert.equal(Object.hasOwn(response.body.typedData.message, "secret"), false);
+  assert.equal(String(response.body.message).toLowerCase().includes("hour"), false);
+});

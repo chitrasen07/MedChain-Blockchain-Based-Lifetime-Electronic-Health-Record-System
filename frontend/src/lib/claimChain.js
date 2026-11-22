@@ -1,5 +1,6 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { INSTANT_PATIENT_REGISTRY } from "./instantRegistry.js";
 
 export const LOCAL_CLAIM_CHAIN_ID = 31337;
 export const SEPOLIA_CHAIN_ID = 11155111;
@@ -117,6 +118,27 @@ export function transferCalldata(kind, patientRef, newController = "") {
   return `${selector("proposeControllerTransfer(bytes32,address)")}${patientRef.slice(2)}${newController.slice(2).toLowerCase().padStart(64, "0")}`;
 }
 
+function uintWord(value) {
+  return BigInt(value).toString(16).padStart(64, "0");
+}
+
+export function instantClaimCalldata(patientRef, secret, signature) {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(patientRef || "") || !/^0x[0-9a-fA-F]{64}$/.test(secret || "") || !/^0x[0-9a-fA-F]{130}$/.test(signature || "")) return "";
+  const body = signature.slice(2).toLowerCase().padEnd(192, "0");
+  return `${selector("claimController(bytes32,bytes32,bytes)")}${patientRef.slice(2).toLowerCase()}${secret.slice(2).toLowerCase()}${uintWord(96)}${uintWord(65)}${body}`;
+}
+
+export function instantRegistryForChain(chainId, registryAddress, localRegistry = "") {
+  const requested = String(registryAddress || "");
+  if (Number(chainId) === SEPOLIA_CHAIN_ID && /^0x[0-9a-fA-F]{40}$/.test(INSTANT_PATIENT_REGISTRY) && INSTANT_PATIENT_REGISTRY.toLowerCase() === requested.toLowerCase()) {
+    return INSTANT_PATIENT_REGISTRY;
+  }
+  if (Number(chainId) === LOCAL_CLAIM_CHAIN_ID && /^0x[0-9a-fA-F]{40}$/.test(localRegistry) && localRegistry.toLowerCase() === requested.toLowerCase()) {
+    return localRegistry;
+  }
+  return "";
+}
+
 export function claimCalldata(kind, patientRef, value) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(patientRef || "") || !/^0x[0-9a-fA-F]{64}$/.test(value || "")) return "";
   const signature = kind === "reveal"
@@ -137,6 +159,26 @@ export async function readClaimDelay(ethereum, registryAddress) {
   const delay = Number(BigInt(result));
   if (!Number.isInteger(delay) || delay <= 0) throw new Error("The contract waiting period could not be read.");
   return delay;
+}
+
+export async function sendInstantClaim({ patientRef, secret, signature, registryAddress, chainId, ethereum, from, localRegistry = "" }) {
+  const registry = instantRegistryForChain(chainId, registryAddress, localRegistry);
+  const data = instantClaimCalldata(patientRef, secret, signature);
+  if (!registry || !data || !ethereum?.request) {
+    throw Object.assign(new Error("Instant wallet linking is not active in this application build. No transaction was sent."), { code: "claim_blocked" });
+  }
+  const current = Number(await ethereum.request({ method: "eth_chainId" }));
+  if (current !== Number(chainId)) {
+    throw Object.assign(new Error("Switch the wallet to Sepolia before linking the wallet."), { code: "claim_blocked" });
+  }
+  const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+  if (from && String(accounts?.[0] || "").toLowerCase() !== String(from).toLowerCase()) {
+    throw Object.assign(new Error("Connect the patient's own wallet. No transaction was sent."), { code: "claim_blocked" });
+  }
+  return ethereum.request({
+    method: "eth_sendTransaction",
+    params: [{ from: accounts[0], to: registry, data }],
+  });
 }
 
 export async function sendPatientClaim({ kind, patientRef, value, registryAddress, chainId, ethereum }) {

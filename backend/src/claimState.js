@@ -5,7 +5,7 @@ const coder = AbiCoder.defaultAbiCoder();
 function patientSlots(patientRef) {
   const base = BigInt(keccak256(coder.encode(["bytes32", "uint256"], [patientRef, 0])));
   const slot = (offset) => `0x${(base + BigInt(offset)).toString(16)}`;
-  return { claimant: slot(2), pendingHash: slot(5), packed: slot(8) };
+  return { claimant: slot(2), identity: slot(3), claim: slot(4), pendingHash: slot(5), packed: slot(8) };
 }
 
 function decodeClaimSlot(word) {

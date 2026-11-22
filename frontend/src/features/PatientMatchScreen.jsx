@@ -4,7 +4,7 @@ import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
-import { ApiError, messageForRequest } from "../lib/api";
+import { ApiError, apiClient, messageForRequest } from "../lib/api";
 import { claimCommitmentForRecoveryCode, createRecoveryCode, sepoliaTransactionUrl } from "../lib/ownership";
 import { connectPatientWallet, ensurePatientSepolia, signPatientLogin } from "../lib/patientWallet";
 import { pageChrome } from "../lib/pageChrome";
@@ -73,6 +73,15 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
   const [claimCommitment, setClaimCommitment] = useState("");
   const [recoverySaved, setRecoverySaved] = useState(false);
   const [walletProof, setWalletProof] = useState(null);
+  const [instantClaim, setInstantClaim] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    apiClient.request("/patient-auth/claim-mode", { authenticated: false })
+      .then((result) => { if (active) setInstantClaim(result?.instant === true); })
+      .catch(() => { if (active) setInstantClaim(false); });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     document.title = `${page.title} · MedChain`;
@@ -190,7 +199,9 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
         setClaimCommitment("");
         setNotice(ownershipMode === "wallet"
           ? "Registered — Wallet linked. The patient can sign in now with the same wallet. The hospital wallet was not used as the owner."
-          : "Registered — Wallet linking pending. Give the patient this Patient ID and the recovery code. They connect their own wallet, check the code, announce the claim, wait for the contract period, reveal it, and then sign in. No second Patient ID is created.");
+          : instantClaim
+            ? "Registered — Wallet linking pending. Give the patient this Patient ID and the recovery code. They connect their own wallet and link it immediately. No second Patient ID is created."
+            : "Registered — Wallet linking pending. Give the patient this Patient ID and the recovery code. This registration is still on the original registry, so they announce once, wait for the contract hour, and then reveal. No second Patient ID is created.");
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && messageForRequest(error).includes("identity commitment")) {
@@ -258,7 +269,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                   onClick={() => setOwnershipMode("claim")}
                 >
                   <span className="block text-sm font-semibold text-navy">Register now, link wallet later</span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">Use this only when the patient's wallet is not available. The same Patient ID is claimed later. The deployed contract then requires a one-hour wait.</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">{instantClaim ? "Use this only when the patient's wallet is not available. The same Patient ID is linked later, immediately, from the patient's own wallet." : "Use this only when the patient's wallet is not available. The same Patient ID is claimed later. The original registry then requires a one-hour wait."}</span>
                 </button>
               </div>
               {ownershipMode === "wallet" ? (
@@ -275,7 +286,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 </div>
               ) : (
                 <div className="mt-4">
-                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">After registration, give the patient this Patient ID and the recovery code. On any computer they connect their own wallet, check the code, announce once, wait for the contract hour, reveal, and sign in. A confirmed announce is read from Sepolia, so a refresh does not lose it.</p>
+                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">{instantClaim ? "After registration, give the patient this Patient ID and the recovery code. On any computer they connect their own wallet, verify the code, and link immediately." : "After registration, give the patient this Patient ID and the recovery code. This path still uses the original registry: announce once, wait for the contract hour, then reveal. A refresh reads the announce from Sepolia."}</p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <Button type="button" variant="secondary" onClick={generateRecoveryCode}>Generate recovery code</Button>
                     {recoveryCode ? (

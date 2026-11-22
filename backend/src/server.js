@@ -1,3 +1,5 @@
+const fs = require("node:fs");
+const path = require("node:path");
 require("dotenv").config();
 const { createApp } = require("./app");
 const { createDb } = require("./db");
@@ -28,6 +30,8 @@ function createRuntime(env) {
     blockchainEnabled,
     rpcUrl: blockchainEnabled ? env.RPC_URL : undefined,
     registryAddress: blockchainEnabled ? env.PATIENT_REGISTRY_ADDRESS : undefined,
+    chainId: Number(env.CHAIN_ID || 11155111),
+    instantRegistry: blockchainEnabled ? readInstantRegistry(env) : null,
     privateKey: blockchainEnabled ? env.BLOCKCHAIN_PRIVATE_KEY : undefined,
     thirdwebSecretKey: blockchainEnabled ? env.THIRDWEB_SECRET_KEY : undefined,
     corsOrigin: env.CORS_ORIGIN || false,
@@ -37,6 +41,40 @@ function createRuntime(env) {
 }
 
 // One trusted hop is Render's proxy. true would let a client choose the address.
+function readInstantRegistry(env) {
+  const fromEnv = [
+    String(env.PATIENT_REGISTRY_V2_ADDRESS || "").trim(),
+    String(env.RECORD_ACCESS_V2_ADDRESS || "").trim(),
+    String(env.EMERGENCY_ACCESS_V2_ADDRESS || "").trim(),
+    String(env.MEDICAL_RECORD_REGISTRY_V2_ADDRESS || "").trim()
+  ];
+  const committed = committedInstant();
+  const values = fromEnv.every((item) => item === "") && committed
+    ? [committed.registry, committed.recordAccess, committed.emergency, committed.medicalRecords]
+    : fromEnv;
+  if (values.every((item) => item === "")) return null;
+  if (values.some((item) => !/^0x[0-9a-fA-F]{40}$/.test(item))) {
+    throw new Error("Instant-claim contract addresses must be configured together");
+  }
+  return { registry: values[0], recordAccess: values[1], emergency: values[2], medicalRecords: values[3] };
+}
+
+function committedInstant() {
+  try {
+    const file = path.join(__dirname, "..", "..", "blockchain", "deployments", "sepolia-v2.json");
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    const contracts = parsed.contracts || {};
+    return {
+      registry: contracts.PatientRegistryV2 || "",
+      recordAccess: contracts.RecordAccessControlV2 || "",
+      emergency: contracts.EmergencyAccessV2 || "",
+      medicalRecords: contracts.MedicalRecordRegistryV2 || ""
+    };
+  } catch {
+    return null;
+  }
+}
+
 function readTrustProxy(env) {
   const value = String(env.TRUST_PROXY ?? "").trim().toLowerCase();
   if (value === "0" || value === "false") return false;

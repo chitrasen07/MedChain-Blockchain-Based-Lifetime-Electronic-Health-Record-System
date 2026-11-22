@@ -40,7 +40,17 @@ function unavailable(fail) {
   };
 }
 
-function createConsentReads({ provider, registryAddress, signerAddress, fail }) {
+async function versionCountAt(records, recordRef) {
+  try {
+    return Number(await records.versionCount(recordRef));
+  } catch (error) {
+    const data = String(error?.data || error?.info?.error?.data || error?.message || "");
+    if (data.toLowerCase().includes("recordnotfound") || data.includes("0x3e07f1a1")) return 0;
+    throw error;
+  }
+}
+
+function createConsentReads({ provider, registryAddress, signerAddress, fail, instant = null }) {
   if (!provider) return unavailable(fail);
   let scopePromise = null;
 
@@ -95,6 +105,39 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
     };
   }
 
+  const instantRegistry = instant?.registry
+    ? new Contract(instant.registry, [
+      "function patientExists(bytes32 patientRef) view returns (bool)",
+      "function isActivePatient(bytes32 patientRef) view returns (bool)"
+    ], provider)
+    : null;
+  const instantAccess = instant?.recordAccess
+    ? new Contract(instant.recordAccess, [
+      "function hasAccess(bytes32 patientRef, address account) view returns (bool)",
+      "function getAccessExpiry(bytes32 patientRef, address account) view returns (uint256)",
+      "event AccessGranted(bytes32 indexed patientRef, address indexed authorizedAddress, address indexed grantedBy, uint256 expiresAt)",
+      "event AccessRevoked(bytes32 indexed patientRef, address indexed authorizedAddress, address indexed revokedBy)"
+    ], provider)
+    : null;
+  const instantEmergency = instant?.emergency
+    ? new Contract(instant.emergency, [
+      "function checkEmergencyAccess(bytes32 patientRef, address doctor) view returns (bool)",
+      "event EmergencyAccessGranted(bytes32 indexed patientRef, address indexed doctor, bytes32 reasonHash, uint256 expiresAt)"
+    ], provider)
+    : null;
+  const instantRecords = instant?.medicalRecords
+    ? new Contract(instant.medicalRecords, ["function versionCount(bytes32 recordRef) view returns (uint256)"], provider)
+    : null;
+
+  async function onInstant(patientRef) {
+    return Boolean(instantRegistry) && await instantRegistry.patientExists(patientRef);
+  }
+
+  async function accessFor(patientRef) {
+    if (instantAccess && await onInstant(patientRef)) return { access: instantAccess, emergency: instantEmergency, fromBlock: 0 };
+    return scope();
+  }
+
   async function roleManager() {
     const registry = new Contract(registryAddress, ["function roleManager() view returns (address)"], provider);
     const address = await registry.roleManager();
@@ -125,12 +168,13 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
       return roles.hasRole(id(roleName), getAddress(account));
     },
     async isActivePatient(patientRef) {
+      if (await onInstant(patientRef)) return instantRegistry.isActivePatient(patientRef);
       const registry = new Contract(SEPOLIA.registry, ["function isActivePatient(bytes32 patientRef) view returns (bool)"], provider);
       return registry.isActivePatient(patientRef);
     },
     async getAccessExpiry(patientRef, account) {
       try {
-        return await (await scope()).access.getAccessExpiry(patientRef, account);
+        return await (await accessFor(patientRef)).access.getAccessExpiry(patientRef, account);
       } catch (error) {
         const data = String(error?.data || error?.info?.error?.data || error?.message || "");
         if (data.toLowerCase().includes("noactivegrant") || data.includes("0x")) {
@@ -140,27 +184,22 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
       }
     },
     async recordVersionCount(recordRef) {
-      const records = new Contract(SEPOLIA.medicalRecords, ["function versionCount(bytes32 recordRef) view returns (uint256)"], provider);
-      try {
-        return Number(await records.versionCount(recordRef));
-      } catch (error) {
-        const data = String(error?.data || error?.info?.error?.data || error?.message || "");
-        if (data.toLowerCase().includes("recordnotfound") || data.includes("0x3e07f1a1")) return 0;
-        throw error;
-      }
+      const count = await versionCountAt(new Contract(SEPOLIA.medicalRecords, ["function versionCount(bytes32 recordRef) view returns (uint256)"], provider), recordRef);
+      if (count > 0 || !instantRecords) return count;
+      return versionCountAt(instantRecords, recordRef);
     },
     async hasAccess(patientRef, account) {
-      return (await scope()).access.hasAccess(patientRef, account);
+      return (await accessFor(patientRef)).access.hasAccess(patientRef, account);
     },
     async checkEmergencyAccess(patientRef, account) {
-      return (await scope()).emergency.checkEmergencyAccess(patientRef, account);
+      return (await accessFor(patientRef)).emergency.checkEmergencyAccess(patientRef, account);
     },
     async emergencyCooldown(patientRef, account) {
       const sessions = await this.listEmergency(patientRef);
       return sessions.some((session) => getAddress(session.wallet) === getAddress(account) && session.cooldownActive);
     },
     async listConsent(patientRef) {
-      const { access, fromBlock } = await scope();
+      const { access, fromBlock } = await accessFor(patientRef);
       const granted = await access.queryFilter(access.filters.AccessGranted(patientRef), fromBlock);
       const wallets = [...new Set(granted.map((event) => getAddress(event.args.authorizedAddress)))];
       const now = Math.floor(Date.now() / 1000);
@@ -184,7 +223,7 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
       return permissions;
     },
     async listConsentHistory(patientRef) {
-      const { access, fromBlock } = await scope();
+      const { access, fromBlock } = await accessFor(patientRef);
       const granted = await access.queryFilter(access.filters.AccessGranted(patientRef), fromBlock);
       const revoked = await access.queryFilter(access.filters.AccessRevoked(patientRef), fromBlock);
       return [
@@ -201,7 +240,7 @@ function createConsentReads({ provider, registryAddress, signerAddress, fail }) 
       ];
     },
     async listEmergency(patientRef) {
-      const { emergency, fromBlock } = await scope();
+      const { emergency, fromBlock } = await accessFor(patientRef);
       const granted = await emergency.queryFilter(emergency.filters.EmergencyAccessGranted(patientRef), fromBlock);
       const latest = new Map();
       for (const event of granted) {
