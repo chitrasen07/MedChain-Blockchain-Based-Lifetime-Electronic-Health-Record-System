@@ -10,6 +10,7 @@ const { registerPatientAuth, patientOwnerBlocked, STAFF_OWNER } = require("./pat
 const { registerClinicalRecords, openClinicalAccess, noteClinicalAudit } = require("./clinicalRecords");
 const { CONSENT_REQUIRED } = require("./consentChain");
 const { registerNursing } = require("./nursing");
+const { registerAppointments } = require("./appointments");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
 const {
@@ -753,6 +754,7 @@ function createApp({ db, blockchain, config }) {
   registerPatientAuth(app, { db, blockchain, config, authRateLimit: patientAuthRateLimit() });
   registerClinicalRecords(app, { db, blockchain, config, authRateLimit });
   registerNursing(app, { db, blockchain, config });
+  registerAppointments(app, { db, config });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {

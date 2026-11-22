@@ -32,6 +32,7 @@ function createDb(config) {
   }
   return {
     query,
+    transaction,
     async checkReady() {
       await query("SELECT 1");
     },

@@ -1,4 +1,5 @@
 import {
+  CalendarDays,
   ClipboardList,
   FileSearch,
   Fingerprint,
@@ -39,6 +40,7 @@ export const workspaces = {
     pending: false,
     nav: [
       { label: "Overview", to: "/doctor", end: true, icon: Stethoscope },
+      { label: "Appointments", to: "/doctor/appointments", icon: CalendarDays },
       { label: "Patient Lookup", to: "/doctor/lookup", icon: Search },
       { label: "Visit References", to: "/doctor/visits", icon: FileSearch },
       { label: "Clinical records", to: "/doctor/records", icon: ClipboardList },
@@ -97,6 +99,7 @@ export const workspaces = {
     pending: false,
     nav: [
       { label: "Dashboard", to: "/patient", end: true, icon: LayoutDashboard },
+      { label: "Appointments", to: "/patient/appointments", icon: CalendarDays },
       { label: "Health identity", to: "/patient/identity", icon: Fingerprint },
       { label: "Ownership", to: "/patient/ownership", icon: KeyRound },
       { label: "Visit history", to: "/patient/history", icon: ClipboardList },
@@ -207,6 +210,11 @@ export const pages = {
       "Lookup, encrypted clinical entries, and emergency requests for this hospital. Sepolia broadcasts stay disabled until they are approved.",
     kind: "overview",
     items: [
+      {
+        title: "Appointments",
+        text: "Review requests, choose the final date and time, and confirm where the patient should come.",
+        to: "/doctor/appointments",
+      },
       {
         title: "Patient lookup",
         text: "Retrieve a confirmed patient by ID. The response returns identifiers and status.",

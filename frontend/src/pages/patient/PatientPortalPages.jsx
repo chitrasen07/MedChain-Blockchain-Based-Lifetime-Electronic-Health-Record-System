@@ -9,6 +9,7 @@ import { Select } from "../../components/Select";
 import { LoadingSkeleton } from "../../components/LoadingSkeleton";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBadge } from "../../components/StatusBadge";
+import { UpcomingAppointmentCard } from "../../features/PatientAppointments";
 import { VerificationNotice } from "../../components/VerificationNotice";
 import { ApiError, apiClient, messageForRequest } from "../../lib/api";
 import { claimBroadcastAllowed, sendPatientClaim, waitForReceipt } from "../../lib/claimChain";
@@ -118,6 +119,7 @@ export function PatientDashboardPage() {
       />
       {state.phase === "loading" ? <LoadingSkeleton label="Loading patient identity" /> : null}
       {state.phase === "error" ? <ErrorState title="Identity unavailable" message={state.message} action={<Button onClick={state.retry}>Try again</Button>} /> : null}
+      <UpcomingAppointmentCard />
       {state.phase === "ready" ? (
         <div className="space-y-4">
           <Card title="Health identity">

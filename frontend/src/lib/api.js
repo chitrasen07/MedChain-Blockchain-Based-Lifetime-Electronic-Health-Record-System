@@ -102,6 +102,14 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "Choose a password that is different from the current password.",
   "Use at least 12 characters with a letter and a number.",
   "Too many password changes. Wait and try again.",
+  "Check the appointment details and try again.",
+  "Choose a future appointment date and time.",
+  "Choose a doctor at this hospital.",
+  "A verified doctor account is required.",
+  "An appointment request for this doctor and time is already pending.",
+  "This doctor already has an appointment at that time.",
+  "This appointment can no longer be changed.",
+  "Appointment not found.",
 ]);
 
 function errorForStatus(status, serverMessage) {

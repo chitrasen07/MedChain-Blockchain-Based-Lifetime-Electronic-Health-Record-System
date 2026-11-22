@@ -11,6 +11,8 @@ import {
   AdminStaffPage,
 } from "./pages/admin/AdminPages";
 import { DoctorEmergencyPage, DoctorLookupPage, DoctorOverviewPage, DoctorRecordsPage, DoctorReviewPage, DoctorVisitsPage } from "./pages/doctor/DoctorPages";
+import { DoctorAppointmentsPage } from "./features/DoctorAppointments";
+import { PatientAppointmentsPage } from "./features/PatientAppointments";
 import { EmergencyDashboardPage } from "./pages/emergency/EmergencyDashboardPage";
 import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -60,6 +62,7 @@ export default function App() {
         <Route element={<ProtectedRoute allow="doctor" />}>
           <Route element={<AppLayout workspace={workspaces.doctor} />}>
             <Route path="/doctor" element={<DoctorOverviewPage />} />
+            <Route path="/doctor/appointments" element={<DoctorAppointmentsPage />} />
             <Route path="/doctor/lookup" element={<DoctorLookupPage />} />
             <Route path="/doctor/visits" element={<DoctorVisitsPage />} />
             <Route path="/doctor/records" element={<DoctorRecordsPage />} />
@@ -106,6 +109,7 @@ export default function App() {
         <Route element={<ProtectedRoute allow="patient" />}>
           <Route element={<AppLayout workspace={workspaces.patient} />}>
             <Route path="/patient" element={<PatientDashboardPage />} />
+            <Route path="/patient/appointments" element={<PatientAppointmentsPage />} />
             <Route path="/patient/identity" element={<PatientIdentityPage />} />
             <Route path="/patient/ownership" element={<PatientOwnershipPage />} />
             <Route path="/patient/history" element={<PatientHistoryPage />} />
