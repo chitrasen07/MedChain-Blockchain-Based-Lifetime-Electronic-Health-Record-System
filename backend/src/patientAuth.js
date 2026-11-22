@@ -4,6 +4,7 @@ const { z } = require("zod");
 const { decryptJson, requiredKey } = require("./crypto");
 const { issuePatientToken, requireAuth, requirePatient } = require("./auth");
 const { presentClinicalRecord, assembleChart, sendSummaryPdf } = require("./clinicalRecords");
+const { recordActivity } = require("./activityAudit");
 const { emergencyCard, mergeProfile } = require("./chart");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -324,6 +325,16 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const facts = await ownershipFacts(db, blockchain, record, signer);
       if (facts.staffControlled) throw signInRejected(STAFF_CONTROLLER);
       if (!facts.walletIsController) throw signInRejected(WRONG_WALLET);
+      await recordActivity(db, {
+        actorRole: "patient",
+        actorLabel: record.patientId,
+        hospitalId: record.hospital_id,
+        patientId: record.id,
+        publicPatientId: record.patientId,
+        action: "WALLET_AUTHENTICATED",
+        category: "login",
+        outcome: "success"
+      }).catch(() => {});
       res.json({
         token: issuePatientToken(record, getAddress(signer), config.jwtSecret)
       });
@@ -499,6 +510,16 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
   app.get("/patient-portal/visits", patient, async (req, res, next) => {
     try {
       const visits = await db.listPatientVisits(req.patient.id);
+      await recordActivity(db, {
+        actorRole: "patient",
+        actorLabel: req.patient.patientId,
+        hospitalId: req.patient.hospital_id,
+        patientId: req.patient.id,
+        publicPatientId: req.patient.patientId,
+        action: "VISIT_HISTORY_VIEWED",
+        category: "records",
+        outcome: "success"
+      }).catch(() => {});
       res.json({
         visits,
         clinicalChart: "encrypted_separately",

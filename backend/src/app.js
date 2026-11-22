@@ -11,6 +11,7 @@ const { registerClinicalRecords, openClinicalAccess, noteClinicalAudit } = requi
 const { CONSENT_REQUIRED } = require("./consentChain");
 const { registerNursing } = require("./nursing");
 const { registerAppointments } = require("./appointments");
+const { registerActivityAudit, recordActivity } = require("./activityAudit");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
 const {
@@ -245,7 +246,32 @@ function createApp({ db, blockchain, config }) {
     try {
       const input = z.object({ email: z.string().email(), password: z.string().min(8) }).parse(req.body);
       const user = await db.authenticateUser(input.email, input.password);
-      if (!user) return res.status(401).json({ error: "Invalid credentials" });
+      if (!user) {
+        if (typeof db.findUserByEmail === "function") {
+          const existing = await db.findUserByEmail(input.email);
+          if (existing) {
+            await recordActivity(db, {
+              actorId: existing.id,
+              actorRole: existing.role,
+              actorLabel: existing.fullName || null,
+              hospitalId: existing.hospital_id,
+              action: "LOGIN_FAILED",
+              category: "login",
+              outcome: existing.status === "active" ? "failure" : "denied"
+            }).catch(() => {});
+          }
+        }
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      await recordActivity(db, {
+        actorId: user.id,
+        actorRole: user.role,
+        actorLabel: user.full_name || null,
+        hospitalId: user.hospital_id,
+        action: "LOGIN_SUCCEEDED",
+        category: "login",
+        outcome: "success"
+      }).catch(() => {});
       res.json({ token: issueToken(user, config.jwtSecret) });
     } catch (error) { next(error); }
   });
@@ -293,6 +319,14 @@ function createApp({ db, blockchain, config }) {
       const message = passwordChangeMessage(currentPassword, newPassword);
       if (message) return res.status(400).json({ error: message });
       await db.changePassword(req.user.sub, currentPassword, newPassword);
+      await recordActivity(db, {
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        hospitalId: req.user.hospital_id,
+        action: "SESSION_REVOKED",
+        category: "login",
+        outcome: "success"
+      }).catch(() => {});
       res.json({ status: "password_updated" });
     } catch (error) { next(error); }
   });
@@ -509,6 +543,17 @@ function createApp({ db, blockchain, config }) {
     try {
       const patient = await db.getPatient(req.params.patientId, req.user.hospital_id);
       if (!patient) return res.status(404).json({ error: "Patient not found" });
+      await recordActivity(db, {
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        hospitalId: req.user.hospital_id,
+        patientId: patient.id,
+        publicPatientId: patient.patientId,
+        action: "PATIENT_LOOKUP",
+        category: "profile",
+        outcome: "success",
+        resourceId: patient.id
+      }).catch(() => {});
       res.json(patient);
     } catch (error) { next(error); }
   });
@@ -708,9 +753,30 @@ function createApp({ db, blockchain, config }) {
       if (!matches) return res.json({ status: member.authorizationStatus || "pending", verified: false });
       if (clearing) {
         await db.clearStaffAuthorization(member.id, req.user.hospital_id);
+        await recordActivity(db, {
+          actorId: req.user.id,
+          actorRole: req.user.role,
+          hospitalId: req.user.hospital_id,
+          action: "ROLE_REVOKED",
+          category: "security",
+          outcome: "success",
+          resourceId: member.id,
+          metadata: { role: member.role }
+        }).catch(() => {});
         return res.json({ status: "active", verified: true, cleared: true });
       }
       await db.markStaffAuthorization(member.id, req.user.hospital_id, "active", member.authorizationTx);
+      await recordActivity(db, {
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        hospitalId: req.user.hospital_id,
+        action: "ROLE_ASSIGNED",
+        category: "security",
+        outcome: "success",
+        resourceId: member.id,
+        txHash: member.authorizationTx || null,
+        metadata: { role: member.role }
+      }).catch(() => {});
       res.json({ status: "active", verified: true });
     } catch (error) { next(error); }
   });
@@ -747,6 +813,16 @@ function createApp({ db, blockchain, config }) {
         };
       }
       const user = await db.changeStaffRole({ userId: member.id, hospitalId: req.user.hospital_id, role: input.role, authorization });
+      await recordActivity(db, {
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        hospitalId: req.user.hospital_id,
+        action: "ROLE_CHANGED",
+        category: "security",
+        outcome: "success",
+        resourceId: member.id,
+        metadata: { role: input.role }
+      }).catch(() => {});
       res.json({ id: user.id, role: user.role, authorization: authorization ? { status: "pending", action: authorization.action, chainRole: authorization.chainRole, walletAddress: authorization.walletAddress } : null });
     } catch (error) { next(error); }
   });
@@ -755,6 +831,7 @@ function createApp({ db, blockchain, config }) {
   registerClinicalRecords(app, { db, blockchain, config, authRateLimit });
   registerNursing(app, { db, blockchain, config });
   registerAppointments(app, { db, config });
+  registerActivityAudit(app, { db, blockchain, config });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {

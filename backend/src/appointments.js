@@ -287,8 +287,10 @@ function createPgAppointmentStore(db) {
           [input.hospitalId, input.patientId, input.doctorId, input.requestedStart, HOSPITAL_ZONE, input.reasonCiphertext]
         );
         await client.query(
-          "INSERT INTO audit_events (actor_id, action, resource_id, metadata) VALUES ($1, 'APPOINTMENT_REQUESTED', $2, $3::jsonb)",
-          [null, inserted.rows[0].id, JSON.stringify({ patientId: input.patientId, doctorId: input.doctorId })]
+          `INSERT INTO audit_events (
+             actor_id, actor_role, actor_label, hospital_id, patient_id, action, category, outcome, resource_id, metadata
+           ) VALUES ($1,'patient',$2,$3,$4,'APPOINTMENT_REQUESTED','appointment','success',$5,$6::jsonb)`,
+          [null, input.publicPatientId || null, input.hospitalId, input.patientId, inserted.rows[0].id, JSON.stringify({ doctorId: input.doctorId })]
         );
         return readJoined(client, inserted.rows[0].id);
       }).catch(mapAppointmentError);
@@ -363,8 +365,10 @@ function createPgAppointmentStore(db) {
           );
         }
         await client.query(
-          "INSERT INTO audit_events (actor_id, action, resource_id, metadata) VALUES ($1, $2, $3, $4::jsonb)",
-          [input.actorId || null, input.action, row.id, JSON.stringify({ status: input.status })]
+          `INSERT INTO audit_events (
+             actor_id, actor_role, hospital_id, patient_id, action, category, outcome, resource_id, metadata
+           ) VALUES ($1,$2,$3,$4,$5,'appointment','success',$6,$7::jsonb)`,
+          [input.actorId || null, input.actorRole || null, input.hospitalId, row.patientId, input.action, row.id, JSON.stringify({ status: input.status })]
         );
         return readJoined(client, row.id);
       }).catch(mapAppointmentError);
@@ -619,6 +623,7 @@ function registerAppointments(app, { db, config = {}, store } = {}) {
         hospitalId: req.user.hospital_id,
         doctorId: req.user.id,
         actorId: req.user.id,
+        actorRole: req.user.role,
         ...change()
       });
       if (!row) return res.status(404).json({ error: MESSAGES.missing });

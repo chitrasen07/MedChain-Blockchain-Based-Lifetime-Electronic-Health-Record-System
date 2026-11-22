@@ -8,8 +8,8 @@ export function Topbar({ title, onMenu, menuOpen = false }) {
   const { user, logout } = useAuth();
   const accountLabel = user ? roleLabel(user.role) : "Account not signed in";
 
-  function signOut() {
-    logout();
+  async function signOut() {
+    await logout();
     navigate(user?.role === "patient" ? "/patient/login" : "/login", { replace: true });
   }
 

@@ -38,9 +38,57 @@ function createDb(config) {
     },
     identityHashes,
     async authenticateUser(email, password) {
-      const result = await query("SELECT id,email,password_hash,role,hospital_id,status,token_version FROM users WHERE email=$1", [email.toLowerCase()]);
+      const result = await query("SELECT id,email,password_hash,role,hospital_id,status,token_version,full_name FROM users WHERE email=$1", [email.toLowerCase()]);
       const user = result.rows[0];
       return user && user.status === "active" && verifyPassword(password, user.password_hash) ? user : null;
+    },
+    async findUserByEmail(email) {
+      const result = await query(
+        "SELECT id, role, hospital_id, status, full_name AS \"fullName\" FROM users WHERE email=$1",
+        [String(email || "").toLowerCase()]
+      );
+      return result.rows[0] || null;
+    },
+    async recordActivity(event) {
+      const resourceId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.resourceId || "") ? event.resourceId : null;
+      let patientId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.patientId || "") ? event.patientId : null;
+      if (!patientId && event.publicPatientId && event.hospitalId) {
+        const found = await query("SELECT id FROM patients WHERE patient_id=$1 AND hospital_id=$2", [event.publicPatientId, event.hospitalId]);
+        patientId = found.rows[0]?.id || null;
+      }
+      const viewActions = new Set(["record_viewed", "intake_viewed", "PATIENT_LOOKUP", "PROFILE_VIEWED", "VISIT_HISTORY_VIEWED"]);
+      if (viewActions.has(event.action)) {
+        const recent = await query(
+          `SELECT 1 FROM audit_events
+           WHERE action=$1 AND actor_id IS NOT DISTINCT FROM $2 AND actor_role IS NOT DISTINCT FROM $3
+             AND patient_id IS NOT DISTINCT FROM $4 AND created_at > now() - interval '15 minutes'
+           LIMIT 1`,
+          [event.action, event.actorId || null, event.actorRole || null, patientId]
+        );
+        if (recent.rowCount) return { skipped: true };
+      }
+      const inserted = await query(
+        `INSERT INTO audit_events (
+           actor_id, actor_role, actor_label, hospital_id, patient_id, action, category, outcome, source, resource_id, request_id, tx_hash, metadata
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+         RETURNING id, created_at AS "createdAt"`,
+        [
+          event.actorId || null,
+          event.actorRole || null,
+          event.actorLabel || null,
+          event.hospitalId || null,
+          patientId,
+          event.action,
+          event.category || null,
+          event.outcome || "success",
+          event.source || "hospital",
+          resourceId,
+          event.requestId || null,
+          event.txHash || null,
+          JSON.stringify(event.metadata || {})
+        ]
+      );
+      return inserted.rows[0];
     },
     async getUserForAuth(id) {
       const result = await query(
@@ -623,6 +671,32 @@ function createDb(config) {
       return result.rows;
     },
     async createClinicalAudit(input) {
+      const allowed = new Set(["record_created", "record_viewed", "record_corrected", "record_anchored", "summary_exported"]);
+      if (!allowed.has(input.action)) {
+        await this.recordActivity({
+          actorId: input.actorId || null,
+          actorRole: input.actorRole,
+          hospitalId: input.hospitalId,
+          publicPatientId: input.publicPatientId,
+          action: input.action,
+          category: "changes",
+          outcome: "success",
+          txHash: input.txHash || null
+        });
+        return;
+      }
+      if (input.action === "record_viewed") {
+        const recent = await query(
+          `SELECT 1 FROM clinical_audit_events e
+           JOIN patients p ON p.id = e.patient_id
+           WHERE p.patient_id=$1 AND e.hospital_id=$2 AND e.action='record_viewed'
+             AND e.actor_role=$3 AND e.actor_id IS NOT DISTINCT FROM $4
+             AND e.created_at > now() - interval '15 minutes'
+           LIMIT 1`,
+          [input.publicPatientId, input.hospitalId, input.actorRole, input.actorId || null]
+        );
+        if (recent.rowCount) return;
+      }
       await query(
         "INSERT INTO clinical_audit_events (hospital_id, patient_id, actor_id, actor_role, action, category, version_index, tx_hash) SELECT $1, id, $3, $4, $5, $6, $7, $8 FROM patients WHERE patient_id=$2 AND hospital_id=$1 AND status='confirmed'",
         [input.hospitalId, input.publicPatientId, input.actorId || null, input.actorRole, input.action, input.category || null, Number.isInteger(input.versionIndex) ? input.versionIndex : null, input.txHash || null]

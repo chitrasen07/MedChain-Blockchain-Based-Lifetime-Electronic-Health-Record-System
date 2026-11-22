@@ -8,6 +8,7 @@ import {
   HeartPulse,
   KeyRound,
   LayoutDashboard,
+  ScrollText,
   ListTodo,
   NotebookPen,
   Search,
@@ -26,6 +27,7 @@ export const workspaces = {
     pending: false,
     nav: [
       { label: "Overview", to: "/admin", end: true, icon: LayoutDashboard },
+      { label: "Activity", to: "/admin/activity", icon: ScrollText },
       { label: "Patient Registration", to: "/admin/registration", icon: UserPlus },
       { label: "Patient Matching", to: "/admin/matching", icon: GitCompare },
       { label: "Review Cases", to: "/admin/reviews", icon: ClipboardList },
@@ -41,6 +43,7 @@ export const workspaces = {
     nav: [
       { label: "Overview", to: "/doctor", end: true, icon: Stethoscope },
       { label: "Appointments", to: "/doctor/appointments", icon: CalendarDays },
+      { label: "Activity", to: "/doctor/activity", icon: ScrollText },
       { label: "Patient Lookup", to: "/doctor/lookup", icon: Search },
       { label: "Visit References", to: "/doctor/visits", icon: FileSearch },
       { label: "Clinical records", to: "/doctor/records", icon: ClipboardList },
@@ -70,6 +73,7 @@ export const workspaces = {
       { label: "Overview", to: "/staff", end: true, icon: LayoutDashboard },
       { label: "Register Patient", to: "/staff/registration", icon: UserPlus },
       { label: "Patient Lookup", to: "/staff/lookup", icon: Search },
+      { label: "Activity", to: "/staff/activity", icon: ScrollText },
       { label: "Record Vitals", to: "/staff/vitals", icon: HeartPulse },
       { label: "Visit Notes", to: "/staff/notes", icon: NotebookPen },
       { label: "Lab Reports", to: "/staff/labs", icon: FlaskConical },
@@ -100,6 +104,7 @@ export const workspaces = {
     nav: [
       { label: "Dashboard", to: "/patient", end: true, icon: LayoutDashboard },
       { label: "Appointments", to: "/patient/appointments", icon: CalendarDays },
+      { label: "Activity", to: "/patient/activity", icon: ScrollText },
       { label: "Health identity", to: "/patient/identity", icon: Fingerprint },
       { label: "Ownership", to: "/patient/ownership", icon: KeyRound },
       { label: "Visit history", to: "/patient/history", icon: ClipboardList },

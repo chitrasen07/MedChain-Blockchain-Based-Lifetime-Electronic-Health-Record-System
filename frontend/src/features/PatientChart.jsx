@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
@@ -322,6 +323,7 @@ export function PatientChart({ chart, patientId, readOnly = false, onReload }) {
       ) : null}
       {tab === "Audit" ? (
         <Card title="Audit trail" description="Events name the action only. Clinical text and secrets are not written here.">
+          {readOnly ? <Link className="mb-3 inline-flex text-sm font-medium text-teal hover:text-teal-dark" to="/patient/activity">Open My Activity & Access History</Link> : null}
           {chart.audit?.length ? chart.audit.map((event, index) => (
             <p key={`${event.action}-${event.at}-${index}`} className="mb-2 text-sm text-ink">
               <span className="font-medium text-navy">{event.action}</span>

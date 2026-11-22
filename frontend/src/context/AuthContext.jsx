@@ -73,7 +73,12 @@ export function AuthProvider({ children }) {
         setUser(session);
         return session;
       },
-      logout(notice = SIGNED_OUT_NOTICE) {
+      async logout(notice = SIGNED_OUT_NOTICE) {
+        try {
+          await apiClient.request("/auth/session-end", { method: "POST", body: {} });
+        } catch {
+          /* The browser session ends even when the audit request cannot be stored. */
+        }
         apiClient.setAccessToken(null);
         setUser(null);
         setNotice(typeof notice === "string" && notice ? notice : SIGNED_OUT_NOTICE);

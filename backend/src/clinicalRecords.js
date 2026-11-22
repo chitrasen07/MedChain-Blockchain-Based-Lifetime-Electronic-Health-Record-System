@@ -5,6 +5,7 @@ const { decryptJson, encryptJson, requiredKey } = require("./crypto");
 const { allergyAlerts, buildPatientChart, emergencyCard } = require("./chart");
 const { renderSummaryPdf } = require("./summaryPdf");
 const { requireAuth } = require("./auth");
+const { recordActivity } = require("./activityAudit");
 const {
   ANCHOR_PREPARED,
   CONSENT_REQUIRED,
@@ -587,7 +588,10 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
         action: "record_viewed"
       });
       res.json(chart);
-    } catch (error) { next(error); }
+    } catch (error) {
+      if (error?.statusCode === 403) await deniedClinicalAccess(db, req);
+      next(error);
+    }
   });
 
   app.get("/patients/:patientId/chart.pdf", clinical, async (req, res, next) => {
@@ -636,6 +640,18 @@ function registerClinicalRecords(app, { db, blockchain, config, authRateLimit })
       res.status(201).json({ gender: gender || null, bloodGroup: bloodGroup || null });
     } catch (error) { next(error); }
   });
+}
+
+async function deniedClinicalAccess(db, req) {
+  await recordActivity(db, {
+    actorId: req.user?.id,
+    actorRole: req.user?.role,
+    hospitalId: req.user?.hospital_id,
+    publicPatientId: req.params?.patientId,
+    action: "ACCESS_DENIED",
+    category: "security",
+    outcome: "denied"
+  }).catch(() => {});
 }
 
 async function noteClinicalAudit(db, input) {
