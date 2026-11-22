@@ -3,9 +3,10 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const crypto = require("node:crypto");
+const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 const { encryptJson, decryptJson, fieldHash, requiredKey } = require("./crypto");
-const { issueToken, requireAuth } = require("./auth");
+const { PATIENT_AUDIENCE, issueToken, requireAuth } = require("./auth");
 const { registerPatientAuth, patientOwnerBlocked, STAFF_OWNER } = require("./patientAuth");
 const { registerClinicalRecords, openClinicalAccess, noteClinicalAudit } = require("./clinicalRecords");
 const { CONSENT_REQUIRED } = require("./consentChain");
@@ -14,6 +15,7 @@ const { registerAppointments } = require("./appointments");
 const { registerActivityAudit, recordActivity } = require("./activityAudit");
 const { registerMedicalFiles, SIZE_REJECTED } = require("./medicalFiles");
 const { createUnavailableFileStore } = require("./fileStore");
+const { clearSessionCookie, csrfAccepted, readAuthToken, setSessionCookie } = require("./sessionCookie");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
 const {
@@ -225,7 +227,19 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
   const app = express();
   app.set("trust proxy", config.trustProxy === 1 ? 1 : false);
   app.use(helmet());
-  app.use(cors({ origin: config.corsOrigin }));
+  app.use(cors({
+    origin: config.corsOrigin,
+    credentials: true,
+    allowedHeaders: [
+      "Accept",
+      "Authorization",
+      "Content-Type",
+      "X-Medchain-Request",
+      "X-Medchain-Filename",
+      "X-Medchain-Category",
+      "X-Medchain-Description"
+    ]
+  }));
   app.use(express.json({ limit: "32kb" }));
   app.use(rateLimit({ windowMs: 60_000, limit: 100, standardHeaders: true, skip: skipDemoRateLimit(config) }));
   const authRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: true, skip: skipDemoRateLimit(config) });
@@ -274,9 +288,58 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
         category: "login",
         outcome: "success"
       }).catch(() => {});
-      res.json({ token: issueToken(user, config.jwtSecret) });
+      const token = issueToken(user, config.jwtSecret);
+      setSessionCookie(res, token, { secure: config.secureCookie === true });
+      res.json({ token });
     } catch (error) { next(error); }
   });
+
+  app.get("/auth/session", async (req, res, next) => {
+    try {
+      const found = readAuthToken(req);
+      if (!found || !csrfAccepted(req, found.source)) return res.status(401).json({ error: "Authentication required" });
+      let claims;
+      try {
+        claims = jwt.verify(found.token, config.jwtSecret);
+      } catch {
+        clearSessionCookie(res, { secure: config.secureCookie === true });
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      const expiresAt = Number(claims.exp) * 1000;
+      if (claims.aud === PATIENT_AUDIENCE || claims.role === "patient") {
+        const patient = await db.getPatientForAuth(claims.sub);
+        if (!patient || patient.hospital_id !== claims.hospitalId || patient.did !== claims.patientRef) {
+          clearSessionCookie(res, { secure: config.secureCookie === true });
+          return res.status(401).json({ error: "Authentication required" });
+        }
+        if (typeof claims.walletAddress !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(claims.walletAddress)) {
+          return res.status(401).json({ error: "Authentication required" });
+        }
+        return res.json({
+          id: patient.id,
+          role: "patient",
+          hospitalId: patient.hospital_id,
+          patientRef: patient.did,
+          walletAddress: claims.walletAddress,
+          expiresAt
+        });
+      }
+      const user = await db.getUserForAuth(claims.sub);
+      const tokenVersion = Number.isInteger(claims.tv) ? claims.tv : 0;
+      const currentVersion = user && Number.isInteger(user.token_version) ? user.token_version : 0;
+      if (!user || user.hospital_id !== claims.hospitalId || tokenVersion !== currentVersion) {
+        clearSessionCookie(res, { secure: config.secureCookie === true });
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      res.json({
+        id: user.id,
+        role: user.role,
+        hospitalId: user.hospital_id,
+        expiresAt
+      });
+    } catch (error) { next(error); }
+  });
+
   app.post("/auth/bootstrap", authRateLimit, async (req, res, next) => {
     try {
       if (!config.bootstrapSecret || req.headers["x-bootstrap-secret"] !== config.bootstrapSecret) {
@@ -321,6 +384,7 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
       const message = passwordChangeMessage(currentPassword, newPassword);
       if (message) return res.status(400).json({ error: message });
       await db.changePassword(req.user.sub, currentPassword, newPassword);
+      clearSessionCookie(res, { secure: config.secureCookie === true });
       await recordActivity(db, {
         actorId: req.user.id,
         actorRole: req.user.role,

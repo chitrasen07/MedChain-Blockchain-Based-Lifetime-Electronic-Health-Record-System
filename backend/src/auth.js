@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { csrfAccepted, readAuthToken } = require("./sessionCookie");
 
 const PATIENT_AUDIENCE = "medchain-patient";
 
@@ -27,9 +28,9 @@ function issuePatientToken(patient, walletAddress, secret) {
 function requireAuth(secret, roles = [], { loadUser } = {}) {
   return (req, res, next) => {
     try {
-      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-      if (!token) return res.status(401).json({ error: "Authentication required" });
-      const claims = jwt.verify(token, secret);
+      const found = readAuthToken(req);
+      if (!found || !csrfAccepted(req, found.source)) return res.status(401).json({ error: "Authentication required" });
+      const claims = jwt.verify(found.token, secret);
       if (claims.role === "patient" || claims.aud === PATIENT_AUDIENCE) {
         return res.status(401).json({ error: "Authentication required" });
       }
@@ -51,9 +52,9 @@ function requireAuth(secret, roles = [], { loadUser } = {}) {
 function requirePatient(secret, { loadPatient } = {}) {
   return (req, res, next) => {
     try {
-      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-      if (!token) return res.status(401).json({ error: "Authentication required" });
-      const claims = jwt.verify(token, secret, { audience: PATIENT_AUDIENCE });
+      const found = readAuthToken(req);
+      if (!found || !csrfAccepted(req, found.source)) return res.status(401).json({ error: "Authentication required" });
+      const claims = jwt.verify(found.token, secret, { audience: PATIENT_AUDIENCE });
       if (claims.role !== "patient") return res.status(401).json({ error: "Authentication required" });
       if (!loadPatient) return res.status(503).json({ error: "Authentication unavailable" });
       Promise.resolve(loadPatient(claims.sub)).then((patient) => {

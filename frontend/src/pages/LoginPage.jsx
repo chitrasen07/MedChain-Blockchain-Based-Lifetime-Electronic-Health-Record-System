@@ -12,7 +12,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, isAuthenticated, user, notice: sessionNotice, clearNotice } = useAuth();
+  const { login, isAuthenticated, isLoading, user, notice: sessionNotice, clearNotice } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fieldErrors, setFieldErrors] = useState({ email: "", password: "" });
@@ -53,6 +53,14 @@ export function LoginPage() {
   }
 
   const notice = formNotice || sessionNotice;
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-canvas" role="status">
+        <p className="text-sm text-muted">Checking session</p>
+      </div>
+    );
+  }
 
   return (
     <div className="grid min-h-screen lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">

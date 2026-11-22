@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, apiClient } from "../lib/api";
-import { readPatientSession, readSession } from "../lib/roles";
+import { patientWalletChanged, readPatientSession, readSession, sessionFromProfile } from "../lib/roles";
 import { AuthContext } from "./auth-context";
 
 const EXPIRED_NOTICE = "Your session has ended. Sign in again.";
 const SIGNED_OUT_NOTICE =
   "You are signed out on this browser. The server does not revoke the token. It expires 15 minutes after it was issued.";
 
+const WALLET_CHANGED_NOTICE = "The connected wallet changed. Sign in again with the patient wallet.";
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -19,6 +22,33 @@ export function AuthProvider({ children }) {
     });
     return () => apiClient.setUnauthorizedHandler(null);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    apiClient.restoreSession().then((payload) => {
+      if (!active) return;
+      setUser((current) => current ?? sessionFromProfile(payload));
+      setIsLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user || user.role !== "patient") return undefined;
+    const ethereum = globalThis.window?.ethereum;
+    if (!ethereum?.on) return undefined;
+    const onAccounts = (accounts) => {
+      if (!patientWalletChanged(user.walletAddress, accounts)) return;
+      apiClient.request("/auth/session-end", { method: "POST", body: {} }).catch(() => {});
+      apiClient.setAccessToken(null);
+      setUser(null);
+      setNotice(WALLET_CHANGED_NOTICE);
+    };
+    ethereum.on("accountsChanged", onAccounts);
+    return () => ethereum.removeListener?.("accountsChanged", onAccounts);
+  }, [user]);
 
   useEffect(() => {
     if (!user) return undefined;
@@ -36,7 +66,7 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       isAuthenticated: Boolean(user),
-      isLoading: false,
+      isLoading,
       notice,
       clearNotice() {
         setNotice("");
@@ -86,7 +116,7 @@ export function AuthProvider({ children }) {
         setNotice(typeof notice === "string" && notice ? notice : SIGNED_OUT_NOTICE);
       },
     }),
-    [user, notice],
+    [user, notice, isLoading],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

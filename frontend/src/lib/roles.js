@@ -44,6 +44,41 @@ function decodeBase64Url(value) {
   return new TextDecoder().decode(bytes);
 }
 
+export function sessionFromProfile(payload, now = Date.now()) {
+  if (!payload || typeof payload !== "object") return null;
+  if (typeof payload.expiresAt !== "number" || !Number.isFinite(payload.expiresAt)) return null;
+  const remaining = payload.expiresAt - now;
+  if (remaining <= 0 || remaining > MAX_SESSION_MS) return null;
+  if (typeof payload.id !== "string" || payload.id.length === 0) return null;
+  if (typeof payload.hospitalId !== "string" || payload.hospitalId.length === 0) return null;
+  if (payload.role === "patient") {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(payload.patientRef || "")) return null;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(payload.walletAddress || "")) return null;
+    return {
+      id: payload.id,
+      role: "patient",
+      hospitalId: payload.hospitalId,
+      patientRef: payload.patientRef,
+      walletAddress: payload.walletAddress,
+      expiresAt: payload.expiresAt,
+    };
+  }
+  if (!STAFF_ROLES.includes(payload.role)) return null;
+  return {
+    id: payload.id,
+    role: payload.role,
+    hospitalId: payload.hospitalId,
+    expiresAt: payload.expiresAt,
+  };
+}
+
+export function patientWalletChanged(sessionAddress, accounts) {
+  if (!Array.isArray(accounts) || accounts.length === 0) return false;
+  const next = String(accounts[0] || "");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(sessionAddress || "") || !/^0x[0-9a-fA-F]{40}$/.test(next)) return false;
+  return next.toLowerCase() !== sessionAddress.toLowerCase();
+}
+
 export function readSession(token, now = Date.now()) {
   if (typeof token !== "string") return null;
   const parts = token.split(".");

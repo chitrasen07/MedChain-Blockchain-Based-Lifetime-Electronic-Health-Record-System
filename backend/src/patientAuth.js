@@ -3,6 +3,7 @@ const { getAddress, verifyMessage } = require("ethers");
 const { z } = require("zod");
 const { decryptJson, requiredKey } = require("./crypto");
 const { issuePatientToken, requireAuth, requirePatient } = require("./auth");
+const { setSessionCookie } = require("./sessionCookie");
 const { presentClinicalRecord, assembleChart, sendSummaryPdf } = require("./clinicalRecords");
 const { recordActivity } = require("./activityAudit");
 const { emergencyCard, mergeProfile } = require("./chart");
@@ -335,9 +336,9 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         category: "login",
         outcome: "success"
       }).catch(() => {});
-      res.json({
-        token: issuePatientToken(record, getAddress(signer), config.jwtSecret)
-      });
+      const token = issuePatientToken(record, getAddress(signer), config.jwtSecret);
+      setSessionCookie(res, token, { secure: config.secureCookie === true });
+      res.json({ token });
     } catch (error) { next(error); }
   });
 

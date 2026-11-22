@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { ApiError, createApiClient, messageForAuthFailure } from "../src/lib/api.js";
-import { homeForRole, pathAllowedForRole, readSession, STAFF_ROLES } from "../src/lib/roles.js";
+import { homeForRole, pathAllowedForRole, patientWalletChanged, readSession, sessionFromProfile, STAFF_ROLES } from "../src/lib/roles.js";
 
 function token(payload) {
   const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -96,6 +96,8 @@ describe("auth API client", () => {
       password: "a-real-password",
     });
     assert.equal(seen.options.body.includes("token"), false);
+    assert.equal(seen.options.credentials, "include");
+    assert.equal(seen.options.headers["X-Medchain-Request"], "1");
   });
 
   it("maps 401, 403, 429, and network failures to safe messages", async () => {
@@ -154,6 +156,22 @@ describe("auth API client", () => {
     api.setAccessToken(await api.login("doctor@hospital.org", "a-real-password"));
     await assert.rejects(api.request("/patients/example"), (error) => error.status === 401);
     assert.equal(expired, true);
+  });
+
+  it("restores a session profile and ignores a different wallet only when it changes", () => {
+    const profile = {
+      id: "user-1",
+      role: "doctor",
+      hospitalId: "hospital-1",
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    };
+    assert.equal(sessionFromProfile(profile)?.role, "doctor");
+    assert.equal(sessionFromProfile({ ...profile, expiresAt: Date.now() - 1000 }), null);
+    assert.equal(sessionFromProfile({ ...profile, role: "patient", patientRef: "0x", walletAddress: "0x1" }), null);
+    const wallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+    assert.equal(patientWalletChanged(wallet, []), false);
+    assert.equal(patientWalletChanged(wallet, [wallet]), false);
+    assert.equal(patientWalletChanged(wallet, ["0x6119546CBab8813aCf1c9B1ACa502f9485805A46"]), true);
   });
 
   it("rejects a login response whose token is already expired", async () => {

@@ -15,7 +15,7 @@ const patientIdPattern = /^PATIENT-[0-9]{1,12}$/;
 
 export function PatientLoginPage() {
   const navigate = useNavigate();
-  const { loginPatient, isAuthenticated, user } = useAuth();
+  const { loginPatient, isAuthenticated, isLoading, user } = useAuth();
   const [patientId, setPatientId] = useState("");
   const [walletAddress, setWalletAddress] = useState("");
   const [notice, setNotice] = useState("");
@@ -110,6 +110,14 @@ export function PatientLoginPage() {
       signInLock.current = false;
       setSubmitting(false);
     }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-canvas" role="status">
+        <p className="text-sm text-muted">Checking session</p>
+      </div>
+    );
   }
 
   return (

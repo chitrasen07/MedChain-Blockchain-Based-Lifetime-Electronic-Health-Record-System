@@ -36,6 +36,7 @@ function createRuntime(env) {
     privateKey: blockchainEnabled ? env.BLOCKCHAIN_PRIVATE_KEY : undefined,
     thirdwebSecretKey: blockchainEnabled ? env.THIRDWEB_SECRET_KEY : undefined,
     corsOrigin: env.CORS_ORIGIN || false,
+    secureCookie: readTrustProxy(env) === 1,
     demoDisableRateLimit: String(env.DEMO_DISABLE_RATE_LIMIT || "").trim().toLowerCase() === "true",
     trustProxy: readTrustProxy(env)
   };

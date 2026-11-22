@@ -177,8 +177,8 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
   let accessToken = null;
   let onUnauthorized = null;
 
-  async function request(path, { method = "GET", body, authenticated = true, timeoutMs = 60_000 } = {}) {
-    const headers = { Accept: "application/json" };
+  async function request(path, { method = "GET", body, authenticated = true, silent = false, timeoutMs = 60_000 } = {}) {
+    const headers = { Accept: "application/json", "X-Medchain-Request": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (authenticated && accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
@@ -187,6 +187,7 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, {
         method,
         headers,
+        credentials: "include",
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -208,7 +209,7 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
     }
 
     if (!response.ok) {
-      if (response.status === 401 && authenticated) onUnauthorized?.();
+      if (response.status === 401 && authenticated && !silent) onUnauthorized?.();
       const serverMessage = payload && typeof payload.error === "string" ? payload.error : "";
       const error = errorForStatus(response.status, serverMessage);
       const retryAfterSeconds = readRetryAfter(response, payload);
@@ -234,6 +235,7 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       const headers = {
         Accept: "application/json",
         "Content-Type": "application/octet-stream",
+        "X-Medchain-Request": "1",
         "X-Medchain-Filename": encodeURIComponent(file.name),
         "X-Medchain-Category": category,
       };
@@ -244,6 +246,7 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
         response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, {
           method: "POST",
           headers,
+          credentials: "include",
           body: file,
           signal: AbortSignal.timeout(120_000),
         });
@@ -261,10 +264,20 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       if (!payload) throw new ApiError(REQUEST_MESSAGES.server, { status: response.status, code: "server" });
       return payload;
     },
+    async restoreSession() {
+      try {
+        return await request("/auth/session", { silent: true });
+      } catch {
+        return null;
+      }
+    },
     async download(path) {
-      const headers = { Accept: "application/pdf, image/png, image/jpeg" };
+      const headers = { Accept: "application/pdf, image/png, image/jpeg", "X-Medchain-Request": "1" };
       if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-      const response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, { headers });
+      const response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, {
+        headers,
+        credentials: "include",
+      });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
         throw errorForStatus(response.status, payload?.error || "");

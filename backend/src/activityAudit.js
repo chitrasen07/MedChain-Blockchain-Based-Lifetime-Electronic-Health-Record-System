@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { PATIENT_AUDIENCE, requireAuth, requirePatient } = require("./auth");
+const { clearSessionCookie, csrfAccepted, readAuthToken } = require("./sessionCookie");
 
 const VIEW_WINDOW_MS = 15 * 60 * 1000;
 const HOSPITAL_ZONE = "Asia/Kolkata";
@@ -489,11 +490,12 @@ function registerActivityAudit(app, { db, blockchain, config = {}, store } = {})
 
   app.post("/auth/session-end", async (req, res, next) => {
     try {
-      const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-      if (!token) return res.status(401).json({ error: "Authentication required" });
+      const found = readAuthToken(req);
+      if (!found || !csrfAccepted(req, found.source)) return res.status(401).json({ error: "Authentication required" });
+      clearSessionCookie(res, { secure: config.secureCookie === true });
       let claims;
       try {
-        claims = jwt.verify(token, config.jwtSecret, { ignoreExpiration: true });
+        claims = jwt.verify(found.token, config.jwtSecret, { ignoreExpiration: true });
       } catch {
         return res.status(401).json({ error: "Authentication required" });
       }
