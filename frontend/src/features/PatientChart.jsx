@@ -10,8 +10,9 @@ import { ApiError, apiClient, messageForRequest } from "../lib/api";
 import { anchorLabel, anchorTone, emergencyCardUrl, exactAllergyAlert, filterTimeline, listText } from "../lib/chartView";
 import { clinicalService } from "../services/clinicalService";
 import { DemographicCorrectionForm } from "./DemographicCorrectionForm";
+import { MedicalFilesPanel } from "./MedicalFilesPanel";
 
-const TABS = ["Overview", "Medical History", "Vitals", "Prescriptions", "Lab Reports", "Visits", "Consent", "Blockchain", "Audit"];
+const TABS = ["Overview", "Medical History", "Vitals", "Prescriptions", "Lab Reports", "Medical Files", "Visits", "Consent", "Blockchain", "Audit"];
 
 function Fact({ label, value }) {
   return (
@@ -256,6 +257,7 @@ export function PatientChart({ chart, patientId, readOnly = false, onReload }) {
           {readOnly ? null : <RecordForm patientId={patientId} category="prescription" saving={saving} allergies={allergies} onSubmit={saveRecord} />}
         </Card>
       ) : null}
+      {tab === "Medical Files" ? <MedicalFilesPanel patientId={patientId} readOnly={readOnly} /> : null}
       {tab === "Lab Reports" ? (
         <Card title="Laboratory results" description="A result is not marked normal or abnormal. A stored reference range is shown as text.">
           {chart.labs?.results?.length ? chart.labs.results.map((result) => (

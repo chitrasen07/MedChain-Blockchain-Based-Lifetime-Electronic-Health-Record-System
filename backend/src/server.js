@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 require("dotenv").config();
 const { createApp } = require("./app");
+const { createFileStore } = require("./fileStore");
 const { createDb } = require("./db");
 const { createBlockchainAdapter } = require("./blockchain");
 
@@ -86,7 +87,12 @@ function readTrustProxy(env) {
 
 if (require.main === module) {
   const config = createRuntime(process.env);
-  const app = createApp({ db: createDb(config), blockchain: createBlockchainAdapter(config), config });
+  const app = createApp({
+    db: createDb(config),
+    blockchain: createBlockchainAdapter(config),
+    config,
+    fileStore: createFileStore(process.env)
+  });
   app.listen(config.port, () => console.log(`MedChain backend listening on ${config.port}`));
 }
 

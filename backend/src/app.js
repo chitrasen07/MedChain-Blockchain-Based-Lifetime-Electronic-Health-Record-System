@@ -12,6 +12,8 @@ const { CONSENT_REQUIRED } = require("./consentChain");
 const { registerNursing } = require("./nursing");
 const { registerAppointments } = require("./appointments");
 const { registerActivityAudit, recordActivity } = require("./activityAudit");
+const { registerMedicalFiles, SIZE_REJECTED } = require("./medicalFiles");
+const { createUnavailableFileStore } = require("./fileStore");
 const { getAddress, verifyMessage } = require("ethers");
 const { passwordChangeMessage } = require("./passwordChange");
 const {
@@ -219,7 +221,7 @@ function skipDemoRateLimit(config) {
   return (req) => Boolean(config.demoDisableRateLimit) && DEMO_RATE_LIMIT_PATHS.has(req.path);
 }
 
-function createApp({ db, blockchain, config }) {
+function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
   const app = express();
   app.set("trust proxy", config.trustProxy === 1 ? 1 : false);
   app.use(helmet());
@@ -832,6 +834,13 @@ function createApp({ db, blockchain, config }) {
   registerNursing(app, { db, blockchain, config });
   registerAppointments(app, { db, config });
   registerActivityAudit(app, { db, blockchain, config });
+  registerMedicalFiles(app, {
+    db,
+    blockchain,
+    config,
+    fileStore: fileStore || createUnavailableFileStore(),
+    maxBytes: maxFileBytes
+  });
 
   app.post("/admin/users/:id/disable", admin, async (req, res, next) => {
     try {
@@ -841,6 +850,9 @@ function createApp({ db, blockchain, config }) {
   });
 
   app.use((error, _req, res, _next) => {
+    if (error?.type === "entity.too.large" || error?.status === 413 || error?.statusCode === 413) {
+      return res.status(400).json({ error: SIZE_REJECTED });
+    }
     if (error.name === "ZodError") return res.status(400).json({ error: "Invalid request" });
     const publicError = error.code === "23505" && error.constraint === "users_email_key"
       ? Object.assign(new Error("A staff account with this email already exists."), { statusCode: 409 })

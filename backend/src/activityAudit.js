@@ -47,7 +47,11 @@ const PATIENT_PHRASES = {
   ROLE_CHANGED: "changed a staff role",
   USER_DISABLED: "disabled a staff account",
   PATIENT_REGISTERED: "registered a patient",
-  PATIENT_REGISTRATION_PENDING: "started a patient registration"
+  PATIENT_REGISTRATION_PENDING: "started a patient registration",
+  FILE_UPLOADED: "uploaded a medical file",
+  FILE_VIEWED: "viewed your medical file",
+  FILE_DOWNLOADED: "downloaded your medical file",
+  FILE_ACCESS_DENIED: "was denied access to a medical file"
 };
 
 const STAFF_PHRASES = {
@@ -66,7 +70,9 @@ const STAFF_PHRASES = {
   APPOINTMENT_RESCHEDULED: "rescheduled an appointment",
   APPOINTMENT_REJECTED: "rejected an appointment",
   APPOINTMENT_CANCELLED: "cancelled an appointment",
-  APPOINTMENT_COMPLETED: "completed an appointment"
+  APPOINTMENT_COMPLETED: "completed an appointment",
+  FILE_VIEWED: "viewed a medical file",
+  FILE_DOWNLOADED: "downloaded a medical file"
 };
 
 function categoryFor(action) {
@@ -74,7 +80,9 @@ function categoryFor(action) {
   if (["LOGIN_SUCCEEDED", "LOGIN_FAILED", "LOGOUT", "SESSION_REVOKED", "SESSION_EXPIRED", "WALLET_AUTHENTICATED"].includes(action)) return "login";
   if (["PATIENT_LOOKUP", "PROFILE_VIEWED"].includes(action)) return "profile";
   if (["record_viewed", "intake_viewed", "VISIT_HISTORY_VIEWED", "summary_exported"].includes(action)) return "records";
-  if (["record_created", "record_corrected", "record_anchored", "demographic_corrected", "intake_created", "intake_reviewed", "intake_rejected"].includes(action)) return "changes";
+  if (["record_created", "record_corrected", "record_anchored", "demographic_corrected", "intake_created", "intake_reviewed", "intake_rejected", "FILE_UPLOADED"].includes(action)) return "changes";
+  if (action === "FILE_VIEWED" || action === "FILE_DOWNLOADED") return "records";
+  if (action === "FILE_ACCESS_DENIED") return "security";
   if (String(action).startsWith("ACCESS_") || String(action).startsWith("EMERGENCY_") || action === "WALLET_LINKED") return "consent";
   if (["ROLE_ASSIGNED", "ROLE_REVOKED", "ROLE_CHANGED", "USER_DISABLED", "ACCESS_DENIED"].includes(action)) return "security";
   if (String(action).startsWith("PATIENT_") || String(action).startsWith("MATCH_")) return "registration";

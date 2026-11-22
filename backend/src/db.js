@@ -67,6 +67,16 @@ function createDb(config) {
         );
         if (recent.rowCount) return { skipped: true };
       }
+      if (resourceId && (event.action === "FILE_VIEWED" || event.action === "FILE_DOWNLOADED")) {
+        const recentFile = await query(
+          `SELECT 1 FROM audit_events
+           WHERE action=$1 AND actor_id IS NOT DISTINCT FROM $2 AND actor_role IS NOT DISTINCT FROM $3
+             AND resource_id=$4 AND created_at > now() - interval '2 minutes'
+           LIMIT 1`,
+          [event.action, event.actorId || null, event.actorRole || null, resourceId]
+        );
+        if (recentFile.rowCount) return { skipped: true };
+      }
       const inserted = await query(
         `INSERT INTO audit_events (
            actor_id, actor_role, actor_label, hospital_id, patient_id, action, category, outcome, source, resource_id, request_id, tx_hash, metadata
@@ -426,6 +436,64 @@ function createDb(config) {
       const result = await query(
         "SELECT id, patient_id AS \"patientId\", did, hospital_id, status, pii_ciphertext AS \"piiCiphertext\", created_at AS \"createdAt\" FROM patients WHERE patient_id=$1 AND hospital_id=$2 AND status='confirmed'",
         [patientId, hospitalId]
+      );
+      return result.rows[0] || null;
+    },
+    async getStaffName(id) {
+      const result = await query("SELECT full_name FROM users WHERE id=$1", [id]);
+      const name = String(result.rows[0]?.full_name || "").trim();
+      return name ? name.slice(0, 120) : null;
+    },
+    async createMedicalFile(input) {
+      const result = await query(
+        `INSERT INTO medical_files (
+           hospital_id, patient_id, uploader_user_id, uploader_role, uploader_label,
+           category, filename_ciphertext, description_ciphertext, storage_key,
+           content_type, byte_size, sha256
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         RETURNING id, created_at AS "createdAt"`,
+        [
+          input.hospitalId,
+          input.patientId,
+          input.uploaderUserId,
+          input.uploaderRole,
+          input.uploaderLabel,
+          input.category,
+          input.filenameCiphertext,
+          input.descriptionCiphertext,
+          input.storageKey,
+          input.contentType,
+          input.byteSize,
+          input.sha256
+        ]
+      );
+      return result.rows[0];
+    },
+    async listMedicalFiles(patientId, hospitalId) {
+      const result = await query(
+        `SELECT id, category, filename_ciphertext AS "filenameCiphertext",
+                description_ciphertext AS "descriptionCiphertext",
+                content_type AS "contentType", byte_size AS "byteSize",
+                uploader_role AS "uploaderRole", uploader_label AS "uploaderLabel",
+                created_at AS "createdAt"
+         FROM medical_files
+         WHERE patient_id=$1 AND hospital_id=$2
+         ORDER BY created_at DESC
+         LIMIT 100`,
+        [patientId, hospitalId]
+      );
+      return result.rows;
+    },
+    async getMedicalFile(id, patientId, hospitalId) {
+      const result = await query(
+        `SELECT id, category, filename_ciphertext AS "filenameCiphertext",
+                description_ciphertext AS "descriptionCiphertext",
+                storage_key AS "storageKey", content_type AS "contentType",
+                byte_size AS "byteSize", sha256, uploader_role AS "uploaderRole",
+                uploader_label AS "uploaderLabel", created_at AS "createdAt"
+         FROM medical_files
+         WHERE id=$1 AND patient_id=$2 AND hospital_id=$3`,
+        [id, patientId, hospitalId]
       );
       return result.rows[0] || null;
     },

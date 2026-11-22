@@ -82,6 +82,11 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "The transaction failed on Sepolia. The record was not anchored.",
   "The hospital signing wallet cannot grant, revoke, or use patient consent.",
   "Patient consent is required.",
+  "This file type is not accepted. Use a PDF, JPG, or PNG.",
+  "This file is larger than 10 MB.",
+  "Enter a file category.",
+  "Medical file storage is not configured.",
+  "File not found",
   "Emergency access is limited to necessary medical information.",
   "Connect the clinical wallet that holds patient consent.",
   "This wallet is not eligible clinical staff on-chain.",
@@ -143,7 +148,10 @@ function errorForStatus(status, serverMessage) {
     const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage) ? serverMessage : FAILURE_MESSAGES.rate_limited;
     return new ApiError(message, { status, code: "rate_limited" });
   }
-  if (status === 503) return new ApiError(FAILURE_MESSAGES.unavailable, { status, code: "unavailable" });
+  if (status === 503) {
+    const message = PUBLIC_REQUEST_MESSAGES.has(serverMessage) ? serverMessage : FAILURE_MESSAGES.unavailable;
+    return new ApiError(message, { status, code: "unavailable" });
+  }
   return new ApiError(FAILURE_MESSAGES.server, { status, code: "server" });
 }
 
@@ -222,8 +230,39 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       onUnauthorized = typeof handler === "function" ? handler : null;
     },
     request,
+    async uploadFile(path, file, { category, description } = {}) {
+      const headers = {
+        Accept: "application/json",
+        "Content-Type": "application/octet-stream",
+        "X-Medchain-Filename": encodeURIComponent(file.name),
+        "X-Medchain-Category": category,
+      };
+      if (description) headers["X-Medchain-Description"] = encodeURIComponent(description);
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+      let response;
+      try {
+        response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, {
+          method: "POST",
+          headers,
+          body: file,
+          signal: AbortSignal.timeout(120_000),
+        });
+      } catch (error) {
+        if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+          throw new ApiError(REQUEST_MESSAGES.timeout, { status: 0, code: "timeout" });
+        }
+        throw new ApiError(FAILURE_MESSAGES.network, { status: 0, code: "network" });
+      }
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        if (response.status === 401 && accessToken) onUnauthorized?.();
+        throw errorForStatus(response.status, payload?.error || "");
+      }
+      if (!payload) throw new ApiError(REQUEST_MESSAGES.server, { status: response.status, code: "server" });
+      return payload;
+    },
     async download(path) {
-      const headers = { Accept: "application/pdf" };
+      const headers = { Accept: "application/pdf, image/png, image/jpeg" };
       if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
       const response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, { headers });
       if (!response.ok) {
