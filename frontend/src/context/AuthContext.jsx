@@ -23,9 +23,11 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (!user) return undefined;
     const timer = window.setTimeout(() => {
+      const ending = apiClient.request("/auth/session-end", { method: "POST", body: {} }).catch(() => {});
       apiClient.setAccessToken(null);
       setUser(null);
       setNotice(EXPIRED_NOTICE);
+      void ending;
     }, Math.max(0, user.expiresAt - Date.now()));
     return () => window.clearTimeout(timer);
   }, [user]);
