@@ -23,9 +23,23 @@ export function remainingClaimSeconds(announcedAt, delaySeconds, now = Date.now(
   return Math.max(0, Math.ceil((readyAt - now) / 1000));
 }
 
+function progressStores() {
+  return [globalThis.localStorage, globalThis.sessionStorage].filter((storage) => storage && typeof storage.getItem === "function");
+}
+
+export function formatClaimWait(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const rest = value % 60;
+  if (hours) return `${hours}h ${minutes}m ${String(rest).padStart(2, "0")}s`;
+  if (minutes) return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+  return `${rest}s`;
+}
+
 export function saveClaimProgress(progress) {
-  const storage = globalThis.sessionStorage;
-  if (!storage || !progress?.patientId || !progress?.walletAddress) return;
+  const stores = progressStores();
+  if (!stores.length || !progress?.patientId || !progress?.walletAddress) return;
   const safe = {
     patientId: progress.patientId,
     walletAddress: progress.walletAddress,
@@ -34,20 +48,61 @@ export function saveClaimProgress(progress) {
     announceTx: progress.announceTx || "",
     announcedAt: Number(progress.announcedAt) || 0,
     delaySeconds: Number(progress.delaySeconds) || 0,
+    onChainClaim: progress.onChainClaim || "",
   };
-  storage.setItem(CLAIM_PROGRESS_KEY, JSON.stringify(safe));
+  const json = JSON.stringify(safe);
+  stores[0].setItem(CLAIM_PROGRESS_KEY, json);
+  for (const extra of stores.slice(1)) extra.removeItem(CLAIM_PROGRESS_KEY);
 }
 
 export function loadClaimProgress() {
-  const storage = globalThis.sessionStorage;
-  if (!storage) return null;
+  const stores = progressStores();
+  if (!stores.length) return null;
   try {
-    const parsed = JSON.parse(storage.getItem(CLAIM_PROGRESS_KEY) || "null");
+    const raw = stores.map((storage) => storage.getItem(CLAIM_PROGRESS_KEY)).find(Boolean);
+    const parsed = JSON.parse(raw || "null");
     if (!parsed || typeof parsed !== "object" || Object.hasOwn(parsed, "recoveryCode")) return null;
     return parsed;
   } catch {
     return null;
   }
+}
+
+export function mergeClaimProgress(saved, chain) {
+  const localPending = Boolean(saved?.announceTx) && !Number(saved?.announcedAt);
+  if (chain?.onChainClaim === "not_submitted" && localPending) {
+    return {
+      ...(saved || {}),
+      onChainClaim: "pending",
+      canAnnounce: false,
+      canReveal: false,
+      message: "Transaction pending. The announce was submitted and is not confirmed yet. Do not send another one.",
+    };
+  }
+  if (chain?.announcedAt || chain?.onChainClaim === "complete" || chain?.onChainClaim === "wrong_wallet" || chain?.onChainClaim === "mismatch") {
+    return {
+      patientId: chain.patientId || saved?.patientId || "",
+      walletAddress: chain.walletAddress || saved?.walletAddress || "",
+      patientRef: chain.patientRef || saved?.patientRef || "",
+      sealedClaim: saved?.sealedClaim || "",
+      announceTx: chain.announceTx || saved?.announceTx || "",
+      announcedAt: Number(chain.announcedAt) || 0,
+      delaySeconds: Number(chain.claimDelaySeconds) || Number(saved?.delaySeconds) || 0,
+      onChainClaim: chain.onChainClaim,
+      canAnnounce: chain.canAnnounce === true,
+      canReveal: chain.canReveal === true,
+      message: chain.message || "",
+    };
+  }
+  return {
+    ...(saved || {}),
+    patientRef: chain?.patientRef || saved?.patientRef || "",
+    onChainClaim: chain?.onChainClaim || "not_submitted",
+    canAnnounce: chain?.canAnnounce !== false,
+    canReveal: chain?.canReveal === true,
+    message: chain?.message || "",
+    delaySeconds: Number(chain?.claimDelaySeconds) || Number(saved?.delaySeconds) || 0,
+  };
 }
 
 function selector(signature) {
@@ -109,14 +164,14 @@ export async function sendPatientClaim({ kind, patientRef, value, registryAddres
   });
 }
 
-export async function waitForReceipt(ethereum, hash) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+export async function waitForReceipt(ethereum, hash, { attempts = 20, intervalMs = 3000 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const receipt = await ethereum.request({ method: "eth_getTransactionReceipt", params: [hash] });
     if (receipt?.blockNumber) {
       const block = await ethereum.request({ method: "eth_getBlockByNumber", params: [receipt.blockNumber, false] });
       return { status: receipt.status, announcedAt: Number(BigInt(block.timestamp)) };
     }
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return null;
 }

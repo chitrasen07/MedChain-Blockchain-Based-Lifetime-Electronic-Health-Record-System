@@ -175,6 +175,7 @@ export function PatientOwnershipPage() {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [notice, setNotice] = useState("");
   const [sealedClaim, setSealedClaim] = useState("");
+  const [claim, setClaim] = useState(null);
   const [checking, setChecking] = useState(false);
   const [chainId, setChainId] = useState(null);
   const broadcastAllowed = claimBroadcastAllowed(chainId);
@@ -203,7 +204,6 @@ export function PatientOwnershipPage() {
       setNotice("Enter the recovery code saved at registration. It stays in this browser.");
       return;
     }
-    setRecoveryCode("");
     setChecking(true);
     try {
       const result = await apiClient.request("/patient-auth/claim-status", {
@@ -212,12 +212,14 @@ export function PatientOwnershipPage() {
           patientId: state.data.patientId,
           walletAddress: user.walletAddress,
           claimCommitment,
+          sealedClaim: sealedClaimForRecoveryCode(code, user.walletAddress, state.data.patientRef),
         }),
         authenticated: false,
       });
-      if (result?.status === "unclaimed" && result.patientRef) {
+      if (result?.patientRef) {
         setSealedClaim(sealedClaimForRecoveryCode(code, user.walletAddress, result.patientRef));
       }
+      setClaim(result);
       setNotice(result?.message || "The ownership check finished. No transaction was sent.");
     } catch (error) {
       setNotice(patientAuthMessage(error instanceof ApiError ? error : error));
@@ -230,9 +232,17 @@ export function PatientOwnershipPage() {
     const code = recoveryCode.trim();
     const patientRef = state.data?.patientRef;
     const value = kind === "announce" ? sealedClaim : code;
+    if (kind === "announce" && claim && claim.canAnnounce === false) {
+      setNotice(claim.message || "An announce transaction is already recorded. Do not send another one.");
+      return;
+    }
+    if (kind === "reveal" && claim?.canReveal !== true) {
+      setNotice(claim?.message || "Reveal is not available until the contract waiting period ends.");
+      return;
+    }
     if (kind === "reveal" && !window.confirm("Revealing publishes the recovery code in the transaction. Continue only if you approve it in MetaMask.")) return;
     try {
-      await sendPatientClaim({
+      const hash = await sendPatientClaim({
         kind,
         patientRef,
         value,
@@ -240,9 +250,18 @@ export function PatientOwnershipPage() {
         chainId,
         ethereum: globalThis.window?.ethereum,
       });
+      const receipt = await waitForReceipt(globalThis.window?.ethereum, hash, { attempts: 40 });
+      if (!receipt) {
+        setNotice("Transaction pending. It was submitted. Check again after Sepolia confirms it. Do not send a duplicate.");
+        return;
+      }
+      if (receipt.status === "0x0") {
+        setNotice(kind === "announce" ? "The announce transaction reverted. Nothing was claimed." : "The reveal transaction reverted. Sign-in stays unavailable.");
+        return;
+      }
       setNotice(kind === "announce"
-        ? "The announcement was submitted. Reveal stays locked until the contract waiting period ends."
-        : "The reveal was submitted. Sign in again after it is confirmed.");
+        ? "Announce confirmed. Do not announce again. Reveal stays locked until the contract waiting period ends."
+        : "Reveal confirmed. Wallet linked successfully. Sign in again with this wallet.");
       if (kind === "reveal") setRecoveryCode("");
     } catch (error) {
       setNotice(error?.message || "The claim was not sent.");
@@ -271,8 +290,7 @@ export function PatientOwnershipPage() {
       {state.phase === "ready" && state.data.ownership === "unclaimed" ? (
         <Card title="Recovery code">
           <p className="text-sm leading-6 text-muted">
-            The contract can assign this wallet only after an announcement and a one-hour wait. Those transactions are
-            not sent from this portal. The recovery code is not included in the request.
+            This record has no controller yet. A confirmed announce is kept on Sepolia for one hour before reveal. Do not announce twice, and do not register a new Patient ID.
           </p>
           <form className="mt-4 max-w-lg space-y-4" onSubmit={handleClaimCheck}>
             <Input
@@ -284,17 +302,14 @@ export function PatientOwnershipPage() {
               hint="Used only to prepare the sealed claim in this browser."
             />
             {notice ? <p role="status" className="text-sm leading-6 text-ink">{notice}</p> : null}
-            {sealedClaim ? (
-              <p className="break-all text-xs leading-5 text-muted">Sealed claim prepared locally: {sealedClaim}</p>
-            ) : null}
             <Button type="submit" loading={checking} disabled={checking}>
               Check recovery code
             </Button>
             <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="secondary" disabled={!broadcastAllowed || !sealedClaim} onClick={() => broadcastClaim("announce")}>
+              <Button type="button" variant="secondary" disabled={!broadcastAllowed || !sealedClaim || claim?.canAnnounce === false} onClick={() => broadcastClaim("announce")}>
                 Announce claim
               </Button>
-              <Button type="button" variant="secondary" disabled={!broadcastAllowed || !recoveryCode.trim()} onClick={() => broadcastClaim("reveal")}>
+              <Button type="button" variant="secondary" disabled={!broadcastAllowed || claim?.canReveal !== true || !recoveryCode.trim()} onClick={() => broadcastClaim("reveal")}>
                 Reveal claim
               </Button>
             </div>

@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { Contract, FetchRequest, Interface, JsonRpcProvider, Wallet, getAddress, id } = require("ethers");
 const { SEPOLIA, createConsentReads, unavailable } = require("./consentReader");
+const { patientSlots, claimAnnouncementFromStorage } = require("./claimState");
 
 const DUPLICATE_COMMITMENT_SELECTOR = id("IdentityCommitmentAlreadyExists()").slice(0, 10);
 const ABI = [
@@ -9,6 +10,7 @@ const ABI = [
   "function patientForCommitment(bytes32 identityCommitment) view returns (bytes32)",
   "function getController(bytes32 patientRef) view returns (address)",
   "function CLAIM_DELAY() view returns (uint256)",
+  "function CLAIM_WINDOW() view returns (uint256)",
   "error IdentityCommitmentAlreadyExists()",
   "event PatientRegistered(bytes32 indexed patientRef,bytes32 indexed identityCommitment,address controller,uint256 registeredAt)"
 ];
@@ -128,7 +130,19 @@ const provider = new JsonRpcProvider(request);
       return { status: match ? "confirmed" : "failed", txHash };
     },
     async getClaimDelay() {
-      return Number(await contract.CLAIM_DELAY());
+      return Number(await reader.CLAIM_DELAY());
+    },
+    async getClaimWindow() {
+      return Number(await reader.CLAIM_WINDOW());
+    },
+    async getClaimAnnouncement(patientRef) {
+      const slots = patientSlots(patientRef);
+      const [claimantWord, pendingHashWord, packedWord] = await Promise.all([
+        provider.getStorage(config.registryAddress, slots.claimant),
+        provider.getStorage(config.registryAddress, slots.pendingHash),
+        provider.getStorage(config.registryAddress, slots.packed)
+      ]);
+      return claimAnnouncementFromStorage({ claimantWord, pendingHashWord, packedWord });
     },
     async verifySigner() {
       const registry = new Contract(config.registryAddress, [...ABI, ...ROLE_ABI], provider);

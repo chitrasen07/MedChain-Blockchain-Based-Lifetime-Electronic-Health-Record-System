@@ -144,7 +144,7 @@ export function PatientLoginPage() {
             <form className="rounded-xl border border-line bg-surface px-5 py-6 shadow-[0_1px_2px_rgba(13,33,56,0.04)] sm:px-7 sm:py-8" onSubmit={handleSignIn} noValidate>
               <h1 className="text-2xl font-semibold tracking-tight text-navy">Patient sign-in</h1>
               <p className="mt-2 text-sm leading-6 text-muted">
-                A wallet linked during registration can sign in now. A record created with a recovery code uses the claim below: check the code, announce, wait one hour, reveal, then sign in.
+                A wallet linked during registration can sign in now. A record created with a recovery code keeps the same Patient ID: check the code below, and reveal only after the contract waiting period. Do not register a second ID.
               </p>
               <div className="mt-7 space-y-4">
                 <Input
@@ -183,7 +183,7 @@ export function PatientLoginPage() {
               </div>
             </form>
 
-            <OwnershipClaimPanel patientId={patientId} walletAddress={walletAddress} />
+            <OwnershipClaimPanel patientId={patientId} walletAddress={walletAddress} onLinked={setOwnership} />
             <p className="text-center text-sm text-muted">
               Hospital staff use{" "}
               <Link to="/login" className="font-medium text-teal hover:text-teal-dark">

@@ -8,6 +8,7 @@ const { emergencyCard, mergeProfile } = require("./chart");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const CLAIM_DELAY_SECONDS = 60 * 60;
+const CLAIM_WINDOW_SECONDS = 24 * 60 * 60;
 const CHALLENGE_MS = 5 * 60 * 1000;
 const SECRET_FIELDS = ["secret", "recoveryCode", "claimSecret", "recoverySecret", "privateKey"];
 
@@ -94,6 +95,127 @@ function claimCommitmentFrom(registrationController) {
   if (typeof registrationController !== "string" || !registrationController.startsWith("unclaimed:")) return "";
   const value = registrationController.slice("unclaimed:".length);
   return bytes32Schema.safeParse(value).success ? value : "";
+}
+
+function sameHash(left, right) {
+  return bytes32Schema.safeParse(left).success && bytes32Schema.safeParse(right).success && left.toLowerCase() === right.toLowerCase();
+}
+
+function describeClaimState({
+  controller,
+  walletAddress,
+  announcement = null,
+  sealedClaim = "",
+  delaySeconds = CLAIM_DELAY_SECONDS,
+  windowSeconds = CLAIM_WINDOW_SECONDS,
+  now = Math.floor(Date.now() / 1000)
+}) {
+  const normalizedController = String(controller || ZERO_ADDRESS).toLowerCase();
+  const wallet = String(walletAddress || "").toLowerCase();
+  if (normalizedController !== ZERO_ADDRESS) {
+    const matches = normalizedController === wallet;
+    return {
+      status: "controller_set",
+      onChainClaim: "complete",
+      canAnnounce: false,
+      canReveal: false,
+      remainingSeconds: 0,
+      walletIsController: matches,
+      message: matches
+        ? "Wallet linked successfully. This patient can sign in with this wallet."
+        : "This record already has a controller. Sign in with that wallet. No claim transaction is submitted."
+    };
+  }
+  if (!announcement?.announced || !announcement.announcedAt) {
+    return {
+      status: "unclaimed",
+      onChainClaim: "not_submitted",
+      canAnnounce: true,
+      canReveal: false,
+      remainingSeconds: 0,
+      message: "Recovery code valid. No announce transaction is on Sepolia yet."
+    };
+  }
+  const announcedAt = Number(announcement.announcedAt);
+  const readyAt = announcedAt + Number(delaySeconds);
+  const replaceableAt = readyAt + Number(windowSeconds);
+  const claimant = String(announcement.claimant || "").toLowerCase();
+  const sameWallet = Boolean(claimant) && claimant === wallet;
+  const remainingSeconds = Math.max(0, readyAt - now);
+  const shared = {
+    announcedAt,
+    announceTx: announcement.txHash || "",
+    remainingSeconds,
+    readyAt,
+    replaceableAt
+  };
+  if (!sameWallet) {
+    const replaceable = now >= replaceableAt;
+    return {
+      ...shared,
+      status: "announced",
+      onChainClaim: "wrong_wallet",
+      canAnnounce: replaceable,
+      canReveal: false,
+      message: replaceable
+        ? "Wrong MetaMask account. This wallet can replace the earlier announcement, and that starts a new one-hour wait."
+        : "Wrong MetaMask account. Connect the wallet that announced this claim."
+    };
+  }
+  if (sealedClaim && announcement.pendingClaimHash && !sameHash(sealedClaim, announcement.pendingClaimHash)) {
+    return {
+      ...shared,
+      status: "announced",
+      onChainClaim: "mismatch",
+      canAnnounce: true,
+      canReveal: false,
+      message: "Announce confirmed, but it does not match this recovery code. Announcing again restarts the one-hour contract wait."
+    };
+  }
+  if (now < readyAt) {
+    return {
+      ...shared,
+      status: "announced",
+      onChainClaim: "announced",
+      canAnnounce: false,
+      canReveal: false,
+      message: "Announce confirmed. Do not announce again. Reveal stays locked until the contract waiting period ends."
+    };
+  }
+  return {
+    ...shared,
+    status: "ready",
+    onChainClaim: "ready",
+    canAnnounce: false,
+    canReveal: true,
+    message: "Ready to reveal. Do not announce again. After the reveal confirms, sign in with this same wallet."
+  };
+}
+
+async function readClaimTiming(blockchain) {
+  let claimDelaySeconds = CLAIM_DELAY_SECONDS;
+  let claimWindowSeconds = CLAIM_WINDOW_SECONDS;
+  if (typeof blockchain?.getClaimDelay === "function") {
+    const delay = await blockchain.getClaimDelay();
+    if (!Number.isInteger(delay) || delay <= 0) throw chainUnavailable();
+    claimDelaySeconds = delay;
+  }
+  if (typeof blockchain?.getClaimWindow === "function") {
+    const claimWindow = await blockchain.getClaimWindow();
+    if (!Number.isInteger(claimWindow) || claimWindow <= 0) throw chainUnavailable();
+    claimWindowSeconds = claimWindow;
+  }
+  return { claimDelaySeconds, claimWindowSeconds };
+}
+
+async function readAnnouncement(blockchain, patientRef) {
+  if (typeof blockchain?.getClaimAnnouncement !== "function") return null;
+  try {
+    return await blockchain.getClaimAnnouncement(patientRef);
+  } catch (error) {
+    if (error?.statusCode === 503) throw chainUnavailable();
+    throw chainUnavailable();
+  }
 }
 
 async function readController(blockchain, patientRef) {
@@ -188,6 +310,12 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const record = await db.findConfirmedPatientForAuth(input.patientId);
       if (!record?.did) throw signInRejected();
       const facts = await ownershipFacts(db, blockchain, record, walletAddress);
+      const announcement = facts.controller === ZERO_ADDRESS ? await readAnnouncement(blockchain, record.did) : null;
+      const timing = announcement?.announced ? await readClaimTiming(blockchain) : { claimDelaySeconds: CLAIM_DELAY_SECONDS, claimWindowSeconds: CLAIM_WINDOW_SECONDS };
+      const claim = facts.controller === ZERO_ADDRESS
+        ? describeClaimState({ controller: facts.controller, walletAddress, announcement, ...timing })
+        : null;
+      const unclaimedMessage = claim && claim.onChainClaim !== "not_submitted" ? claim.message : UNCLAIMED_SIGNIN;
       res.json({
         patientId: record.patientId,
         patientRef: record.did,
@@ -195,10 +323,14 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
         label: facts.controller === ZERO_ADDRESS ? "Registered — Wallet linking pending" : "Registered — Wallet linked",
         staffControlled: facts.staffControlled,
         walletIsController: facts.walletIsController,
+        onChainClaim: claim?.onChainClaim || (facts.controller === ZERO_ADDRESS ? "not_submitted" : "complete"),
+        announcedAt: claim?.announcedAt || 0,
+        remainingSeconds: claim?.remainingSeconds || 0,
+        canReveal: claim?.canReveal === true,
         message: facts.staffControlled
           ? STAFF_CONTROLLER
           : facts.controller === ZERO_ADDRESS
-            ? UNCLAIMED_SIGNIN
+            ? unclaimedMessage
             : facts.walletIsController
               ? "Patient ownership verified."
               : WRONG_WALLET
@@ -229,39 +361,32 @@ function registerPatientAuth(app, { db, blockchain, config, authRateLimit }) {
       const input = z.object({
         patientId: patientIdSchema,
         walletAddress: walletSchema,
-        claimCommitment: bytes32Schema
+        claimCommitment: bytes32Schema,
+        sealedClaim: bytes32Schema.optional()
       }).parse(req.body);
       const walletAddress = getAddress(input.walletAddress);
       const record = await db.findConfirmedPatientForAuth(input.patientId);
       const stored = claimCommitmentFrom(record?.registrationController);
       if (!record?.did || !stored || !sameBytes32(stored, input.claimCommitment)) throw ownershipRejected();
       const controller = await readController(blockchain, record.did);
-      let claimDelaySeconds = CLAIM_DELAY_SECONDS;
-      if (typeof blockchain.getClaimDelay === "function") {
-        try {
-          const delay = await blockchain.getClaimDelay();
-          if (Number.isInteger(delay) && delay > 0) claimDelaySeconds = delay;
-        } catch {
-          throw chainUnavailable();
-        }
-      }
-      if (controller !== ZERO_ADDRESS) {
-        return res.json({
-          status: "controller_set",
-          patientId: record.patientId,
-          onChainClaim: "complete",
-          message: "This record already has a controller. Sign in with that wallet. No claim transaction is submitted."
-        });
-      }
+      const announcement = await readAnnouncement(blockchain, record.did);
+      const timing = await readClaimTiming(blockchain);
+      const claim = describeClaimState({
+        controller,
+        walletAddress,
+        announcement,
+        sealedClaim: input.sealedClaim || "",
+        delaySeconds: timing.claimDelaySeconds,
+        windowSeconds: timing.claimWindowSeconds
+      });
       res.json({
-        status: "unclaimed",
+        ...claim,
         patientId: record.patientId,
         patientRef: record.did,
         walletAddress,
         commitmentMatches: true,
-        onChainClaim: "not_submitted",
-        claimDelaySeconds,
-        message: "The recovery code matches this unclaimed record. The claim transaction is not submitted."
+        claimDelaySeconds: timing.claimDelaySeconds,
+        claimWindowSeconds: timing.claimWindowSeconds
       });
     } catch (error) { next(error); }
   });
@@ -458,6 +583,8 @@ module.exports = {
   registerPatientAuth,
   patientLoginMessage,
   CLAIM_DELAY_SECONDS,
+  CLAIM_WINDOW_SECONDS,
+  describeClaimState,
   patientOwnerBlocked: (db, blockchain, wallet) => controllerRole(db, blockchain, getAddress(wallet).toLowerCase()).then(Boolean),
   STAFF_OWNER,
   STAFF_CONTROLLER,

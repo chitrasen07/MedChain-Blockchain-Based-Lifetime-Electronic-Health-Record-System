@@ -66,7 +66,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
   const [match, setMatch] = useState(null);
   const [registration, setRegistration] = useState(null);
   const [phase, setPhase] = useState("");
-  const [ownershipMode, setOwnershipMode] = useState("claim");
+  const [ownershipMode, setOwnershipMode] = useState("wallet");
   const registerLock = useRef(false);
   const [controller, setController] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
@@ -243,22 +243,22 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={ownershipMode === "claim"}
-                  className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "claim" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
-                  onClick={() => setOwnershipMode("claim")}
-                >
-                  <span className="block text-sm font-semibold text-navy">Register now, link wallet later <span className="font-medium text-teal-dark">Default</span></span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">Creates the lifetime Patient ID without a wallet. The patient later claims ownership with their own MetaMask and the recovery code. The hospital wallet is not the owner.</span>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
                   aria-checked={ownershipMode === "wallet"}
                   className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "wallet" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
                   onClick={() => setOwnershipMode("wallet")}
                 >
-                  <span className="block text-sm font-semibold text-navy">Register and link the patient's wallet now</span>
-                  <span className="mt-1 block text-xs leading-5 text-muted">The patient connects their own MetaMask on Sepolia and signs the one-time link. Staff wallets cannot be used as the patient owner.</span>
+                  <span className="block text-sm font-semibold text-navy">Register and link the patient's wallet now <span className="font-medium text-teal-dark">Recommended</span></span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">The patient connects their own MetaMask on Sepolia and signs the one-time link. The wallet is the owner immediately. Staff wallets cannot be used.</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={ownershipMode === "claim"}
+                  className={`rounded-xl border px-4 py-3 text-left ${ownershipMode === "claim" ? "border-teal ring-1 ring-teal" : "border-line bg-canvas"}`}
+                  onClick={() => setOwnershipMode("claim")}
+                >
+                  <span className="block text-sm font-semibold text-navy">Register now, link wallet later</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">Use this only when the patient's wallet is not available. The same Patient ID is claimed later. The deployed contract then requires a one-hour wait.</span>
                 </button>
               </div>
               {ownershipMode === "wallet" ? (
@@ -275,7 +275,7 @@ export function PatientMatchScreen({ pageKey, canRegister = false }) {
                 </div>
               ) : (
                 <div className="mt-4">
-                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">After registration, the status is Registered — Wallet linking pending. The patient uses this Patient ID on the sign-in page: connect their wallet, check the recovery code, announce, wait for the contract period, reveal, then sign in. Missing the reveal window blocks that claim until it expires.</p>
+                  <p className="rounded-lg border border-line bg-canvas px-3 py-2 text-xs leading-5 text-ink">After registration, give the patient this Patient ID and the recovery code. On any computer they connect their own wallet, check the code, announce once, wait for the contract hour, reveal, and sign in. A confirmed announce is read from Sepolia, so a refresh does not lose it.</p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <Button type="button" variant="secondary" onClick={generateRecoveryCode}>Generate recovery code</Button>
                     {recoveryCode ? (

@@ -11,8 +11,10 @@ export function clinicianLabel(clinician) {
   return wallet ? `${name} · ${role} · ${wallet}` : name;
 }
 
-export function claimStatusBody({ patientId, walletAddress, claimCommitment }) {
-  return { patientId, walletAddress, claimCommitment };
+export function claimStatusBody({ patientId, walletAddress, claimCommitment, sealedClaim }) {
+  const body = { patientId, walletAddress, claimCommitment };
+  if (sealedClaim) body.sealedClaim = sealedClaim;
+  return body;
 }
 
 export function patientRetryLabel(seconds) {

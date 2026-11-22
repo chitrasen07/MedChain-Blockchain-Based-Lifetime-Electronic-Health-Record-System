@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
-import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim, transferCalldata } from "../src/lib/claimChain.js";
+import { claimBroadcastAllowed, claimCalldata, loadClaimProgress, mergeClaimProgress, remainingClaimSeconds, saveClaimProgress, sendPatientClaim, transferCalldata } from "../src/lib/claimChain.js";
 import { SEPOLIA_MEDICAL_RECORDS, SEPOLIA_RECORD_ACCESS, anchorCalldata, emergencyRequestCalldata, grantCalldata, reasonHash, revokeCalldata, sendPreparedTransaction, transactionTarget } from "../src/lib/consentChain.js";
 import { assignRoleCalldata, revokeRoleCalldata, sendRoleAssignment } from "../src/lib/roleChain.js";
 import { clinicalRequestBody } from "../src/services/clinicalService.js";
@@ -93,6 +93,13 @@ describe("clinical records and claims", () => {
     assert.equal(saved.includes("aa".repeat(32)), false);
     assert.equal(loadClaimProgress().announcedAt, 10);
     assert.equal(remainingClaimSeconds(10, 3600, 10_000), 3600);
+    const restored = mergeClaimProgress(
+      { announceTx: "0x" + "ab".repeat(32) },
+      { onChainClaim: "announced", announcedAt: 20, claimDelaySeconds: 3600, canAnnounce: false, canReveal: false, message: "Announce confirmed." }
+    );
+    assert.equal(restored.announcedAt, 20);
+    assert.equal(restored.canAnnounce, false);
+    assert.equal(restored.message.includes("not submitted"), false);
   });
 
   it("prepares consent and emergency calldata without the clinical reason", async () => {
