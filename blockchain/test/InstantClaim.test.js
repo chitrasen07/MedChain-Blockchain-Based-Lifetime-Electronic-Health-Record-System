@@ -114,6 +114,17 @@ describe("instant wallet claim", function () {
     expect(await registry.getController(opened.patientRef)).to.equal(ethers.ZeroAddress);
   });
 
+  it("stores the copied recovery commitment where the migration script reads it", async function () {
+    const ctx = await deploySystem();
+    const { registry } = await deployV2(ctx);
+    const secret = ethers.hexlify(ethers.randomBytes(32));
+    const opened = await registerUnclaimed(registry, ctx.hospitalAdmin, secret);
+    const base = BigInt(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "uint256"], [opened.patientRef, 0])));
+    const stored = await ethers.provider.getStorage(await registry.getAddress(), base + 3n);
+    expect(ethers.toBeHex(stored, 32)).to.equal(opened.commitment);
+    expect(await registry.getController(opened.patientRef)).to.equal(ethers.ZeroAddress);
+  });
+
   it("keeps the original registry delay for a patient who has not moved", async function () {
     const ctx = await deploySystem();
     const secret = ethers.hexlify(ethers.randomBytes(32));
