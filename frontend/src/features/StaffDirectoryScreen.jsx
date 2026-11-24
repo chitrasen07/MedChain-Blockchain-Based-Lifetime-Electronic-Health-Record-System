@@ -47,7 +47,20 @@ function authorizationTone(label) {
   return "info";
 }
 
-const emptyAccount = { fullName: "", email: "", password: "", role: "receptionist", chainRole: "NURSE" };
+const emptyAccount = { fullName: "", email: "", password: "", role: "receptionist", chainRole: "NURSE", linkWallet: "later" };
+
+function accountLabel(status) {
+  if (status === "pending") return "Activation pending";
+  if (status === "disabled") return "Disabled";
+  return "Active";
+}
+
+function walletLabel(accountRow) {
+  if (!clinicalRole(accountRow.role)) return "Not required";
+  if (!accountRow.walletAddress) return "Verification pending";
+  const address = accountRow.walletAddress;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
 
 export function StaffDirectoryScreen({ pageKey }) {
   const { page, crumbs } = pageChrome(pageKey);
@@ -60,6 +73,8 @@ export function StaffDirectoryScreen({ pageKey }) {
   const [errors, setErrors] = useState({});
   const [notice, setNotice] = useState("");
   const [created, setCreated] = useState("");
+  const [issuedCode, setIssuedCode] = useState(null);
+  const [copied, setCopied] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState("");
   const [target, setTarget] = useState(null);
@@ -243,12 +258,23 @@ export function StaffDirectoryScreen({ pageKey }) {
     setNotice("");
     try {
       const result = await adminService.createUser(parsed.body);
-      setCreated(`${result.fullName || result.email} was created as ${roleLabel(result.role)}.`);
       setAccount(emptyAccount);
       setStaffWallet("");
       setWalletProof(null);
-      if (result.authorization?.status === "pending") {
-        await finishChainAction(result, "grant", result.authorization.chainRole, result.authorization.walletAddress);
+      if (result.activationCode) {
+        setIssuedCode({
+          name: result.fullName || result.email,
+          code: result.activationCode,
+          expiresAt: result.activationExpiresAt,
+        });
+        setCopied(false);
+        setCreated(`${result.fullName || result.email} is waiting for activation. Share the code once, then leave this page.`);
+      } else {
+        setIssuedCode(null);
+        setCreated(`${result.fullName || result.email} was created as ${roleLabel(result.role)}.`);
+        if (result.authorization?.status === "pending") {
+          await finishChainAction(result, "grant", result.authorization.chainRole, result.authorization.walletAddress);
+        }
       }
       await load();
     } catch (error) {
@@ -294,6 +320,36 @@ export function StaffDirectoryScreen({ pageKey }) {
     if (!signed) return;
     const saved = await adminService.saveAuthorization(accountRow.id, { fullName: fullName.trim(), chainRole, walletProof: signed.walletProof });
     await finishChainAction(accountRow, "grant", saved.authorization.chainRole, saved.authorization.walletAddress);
+  }
+
+  async function copyIssuedCode() {
+    if (!issuedCode?.code) return;
+    try {
+      await navigator.clipboard.writeText(issuedCode.code);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+      setNotice("Select the activation code and copy it manually. It is not stored again.");
+    }
+  }
+
+  async function regenerateCode(accountRow) {
+    setBusy("code");
+    setNotice("");
+    try {
+      const issued = await adminService.reissueActivation(accountRow.id);
+      setIssuedCode({
+        name: accountRow.fullName || accountRow.email,
+        code: issued.activationCode,
+        expiresAt: issued.activationExpiresAt,
+      });
+      setCopied(false);
+      setCreated("The previous activation code no longer works. Share the new code once.");
+    } catch (error) {
+      setNotice(requestMessage(error));
+    } finally {
+      setBusy("");
+    }
   }
 
   async function onDisable() {
@@ -363,18 +419,21 @@ export function StaffDirectoryScreen({ pageKey }) {
       name: accountRow.fullName || "Not recorded",
       email: accountRow.email,
       role: roleLabel(accountRow.role),
-      status: accountRow.status,
+      status: <StatusBadge tone={accountRow.status === "active" ? "success" : accountRow.status === "pending" ? "warning" : "danger"}>{accountLabel(accountRow.status)}</StatusBadge>,
       authorization: <StatusBadge tone={authorizationTone(label)}>{label}</StatusBadge>,
-      wallet: accountRow.walletAddress || "No wallet linked",
+      wallet: <span title={accountRow.walletAddress || undefined}>{walletLabel(accountRow)}</span>,
       transaction: explorer ? <a className="text-teal" href={explorer} target="_blank" rel="noreferrer">View</a> : "",
       action: (
         <div className="flex flex-col gap-2">
-          {accountRow.status === "active" && accountRow.id !== user?.id ? (
+          {accountRow.status !== "disabled" && accountRow.id !== user?.id ? (
             <Button size="sm" variant="danger" onClick={() => setTarget(accountRow)}>Disable</Button>
           ) : accountRow.id === user?.id ? "Signed-in account" : "Disabled"}
-          {accountRow.id !== user?.id && (label === "Pending" || label === "Failed") ? (
+          {accountRow.status === "pending" && accountRow.id !== user?.id ? (
+            <Button size="sm" variant="secondary" onClick={() => regenerateCode(accountRow)} disabled={Boolean(busy)}>Regenerate activation code</Button>
+          ) : null}
+          {accountRow.status === "active" && accountRow.id !== user?.id && (label === "Pending" || label === "Failed") ? (
             <Button size="sm" variant="secondary" onClick={() => accountRow.walletAddress ? retryAuthorization(accountRow) : linkExisting(accountRow)} disabled={Boolean(busy)}>
-              {accountRow.walletAddress ? "Retry authorization" : "Link wallet"}
+              {accountRow.walletAddress ? "Approve blockchain role" : "Link wallet"}
             </Button>
           ) : null}
           {accountRow.id !== user?.id && accountRow.role !== "administrator" && accountRow.status === "active" ? (
@@ -401,7 +460,7 @@ export function StaffDirectoryScreen({ pageKey }) {
               { key: "name", header: "Name" },
               { key: "email", header: "Email" },
               { key: "role", header: "Role" },
-              { key: "status", header: "Account" },
+              { key: "status", header: "Account activation" },
               { key: "authorization", header: "Blockchain authorization" },
               { key: "wallet", header: "Wallet" },
               { key: "transaction", header: "Transaction" },
@@ -413,12 +472,29 @@ export function StaffDirectoryScreen({ pageKey }) {
           />
         ) : null}
       </Card>
+      {issuedCode ? (
+        <Card className="mt-4" title="Activation code" description={`Share this code with ${issuedCode.name} through a channel you trust. It is shown only once, works on another computer, and the previous code stops working if you generate a new one.`}>
+          <p className="break-all font-mono text-lg tracking-wide text-navy">{issuedCode.code}</p>
+          <p className="mt-2 text-sm leading-6 text-muted">Expires {issuedCode.expiresAt ? new Date(issuedCode.expiresAt).toLocaleString() : "in 24 hours"}. MedChain does not email this code.</p>
+          <Button className="mt-4" type="button" variant="secondary" onClick={copyIssuedCode}>{copied ? "Copied" : "Copy"}</Button>
+        </Card>
+      ) : null}
       <form className="mt-4" onSubmit={onCreate} noValidate>
-        <Card title="Add a staff member" description="Clinical staff sign with their own wallet. Receptionists and reviewers do not need one. The hospital administrator approves the Sepolia role separately, and the hospital signing key is not used.">
+        <Card title="Add a staff member" description="Create the account now and let the staff member activate it later, or link their wallet while they are here. Clinical access still waits for the hospital administrator's Sepolia approval.">
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+            <Button type="button" variant={account.linkWallet === "later" ? "primary" : "secondary"} onClick={() => { setAccount((current) => ({ ...current, linkWallet: "later" })); setWalletProof(null); }}>
+              Link wallet later
+            </Button>
+            <Button type="button" variant={account.linkWallet === "now" ? "primary" : "secondary"} onClick={() => setAccount((current) => ({ ...current, linkWallet: "now" }))}>
+              Link wallet now
+            </Button>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Input label="Name" name="fullName" value={account.fullName} error={errors.fullName} autoComplete="name" onChange={(event) => setAccount((current) => ({ ...current, fullName: event.target.value }))} />
             <Input label="Work email" name="email" type="email" value={account.email} error={errors.email} autoComplete="off" onChange={(event) => setAccount((current) => ({ ...current, email: event.target.value }))} />
-            <Input label="Password" name="password" type="password" value={account.password} error={errors.password} hint="At least 12 characters." autoComplete="new-password" onChange={(event) => setAccount((current) => ({ ...current, password: event.target.value }))} />
+            {account.linkWallet === "now" ? (
+              <Input label="Password" name="password" type="password" value={account.password} error={errors.password} hint="At least 12 characters." autoComplete="new-password" onChange={(event) => setAccount((current) => ({ ...current, password: event.target.value }))} />
+            ) : null}
             <Select label="Role" value={account.role} error={errors.role} onChange={(event) => { setAccount((current) => ({ ...current, role: event.target.value })); setWalletProof(null); }}>
               {STAFF_CREATE_ROLES.map((role) => (
                 <option key={role} value={role}>{roleLabel(role)}</option>
@@ -431,7 +507,7 @@ export function StaffDirectoryScreen({ pageKey }) {
             ) : null}
             {account.role === "doctor" ? <p className="text-sm leading-6 text-muted">The Doctor role is assigned on Sepolia after the wallet signature.</p> : null}
           </div>
-          {clinicalRole(account.role) ? (
+          {account.linkWallet === "now" && clinicalRole(account.role) ? (
             <div className="mt-4">
               <p className="break-all text-sm text-ink">{staffWallet || "No staff wallet connected."}</p>
               {errors.walletAddress ? <p className="mt-1 text-xs text-danger">{errors.walletAddress}</p> : null}
@@ -441,7 +517,7 @@ export function StaffDirectoryScreen({ pageKey }) {
           ) : null}
           {notice ? <p role="alert" className="mt-4 rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">{notice}</p> : null}
           {created ? <p role="status" className="mt-4 rounded-lg border border-line bg-canvas px-3 py-2 text-sm leading-6 text-ink">{created}</p> : null}
-          <Button className="mt-4" type="submit" loading={creating} disabled={creating || Boolean(busy)}>Create account</Button>
+          <Button className="mt-4" type="submit" loading={creating} disabled={creating || Boolean(busy)}>{account.linkWallet === "later" ? "Create account and code" : "Create account"}</Button>
         </Card>
       </form>
       {roleTarget ? (

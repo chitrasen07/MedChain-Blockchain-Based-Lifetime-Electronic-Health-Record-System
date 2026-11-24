@@ -44,7 +44,8 @@ test("migration files are ordered and versioned by filename", async () => {
     "014_demographic_corrections.sql",
     "015_appointments.sql",
     "016_activity_audit.sql",
-    "017_medical_files.sql"
+    "017_medical_files.sql",
+    "018_staff_activation.sql"
   ]);
 });
 

@@ -5,6 +5,7 @@ import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { useAuth } from "../context/useAuth";
 import { ApiError, messageForAuthFailure } from "../lib/api";
+import { StaffActivationForm } from "../features/StaffActivationForm";
 import { homeForRole, pathAllowedForRole } from "../lib/roles";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -18,10 +19,11 @@ export function LoginPage() {
   const [fieldErrors, setFieldErrors] = useState({ email: "", password: "" });
   const [formNotice, setFormNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [activating, setActivating] = useState(false);
 
   useEffect(() => {
-    document.title = "Staff login · MedChain";
-  }, []);
+    document.title = activating ? "Activate staff account · MedChain" : "Staff login · MedChain";
+  }, [activating]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
@@ -92,10 +94,13 @@ export function LoginPage() {
         </div>
         <div className="flex flex-1 items-center px-4 py-8 sm:px-8">
           <div className="mx-auto w-full max-w-md rounded-xl border border-line bg-surface px-5 py-6 shadow-[0_1px_2px_rgba(13,33,56,0.04)] sm:px-7 sm:py-8">
-            <h1 className="text-2xl font-semibold tracking-tight text-balance text-navy">Welcome back</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-balance text-navy">{activating ? "Activate staff account" : "Welcome back"}</h1>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Use the work email created by a hospital administrator. There is no demo account on this page.
+              {activating
+                ? "Use the work email and one-time code from the hospital administrator. Clinical roles also verify the staff member's own wallet. This page does not send a blockchain transaction."
+                : "Use the work email created by a hospital administrator. There is no demo account on this page."}
             </p>
+            {activating ? <StaffActivationForm /> : (
             <form className="mt-7 space-y-4" onSubmit={handleSubmit} noValidate>
               <Input
                 label="Email"
@@ -126,7 +131,13 @@ export function LoginPage() {
                 Sign in
               </Button>
             </form>
+            )}
             <p className="mt-4 text-center text-sm text-muted">
+              <button type="button" className="font-medium text-teal hover:text-teal-dark" onClick={() => setActivating((current) => !current)}>
+                {activating ? "Back to sign in" : "Activate staff account"}
+              </button>
+            </p>
+            <p className="mt-2 text-center text-sm text-muted">
               Patients use{" "}
               <Link to="/patient/login" className="font-medium text-teal hover:text-teal-dark">
                 patient login

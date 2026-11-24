@@ -38,6 +38,7 @@ function createRuntime(env) {
     corsOrigin: env.CORS_ORIGIN || false,
     secureCookie: readTrustProxy(env) === 1,
     demoDisableRateLimit: String(env.DEMO_DISABLE_RATE_LIMIT || "").trim().toLowerCase() === "true",
+    staffActivationHours: Number(env.STAFF_ACTIVATION_HOURS || 24),
     trustProxy: readTrustProxy(env)
   };
 }

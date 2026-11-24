@@ -25,6 +25,7 @@ const {
   messageMatches,
   staffWalletMessage
 } = require("./staffAuthorization");
+const { activationExpiry, createActivationCode, hashActivationCode, registerStaffActivation } = require("./staffActivation");
 
 const profileSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -730,23 +731,86 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
     return signer;
   }
 
+  registerStaffActivation(app, {
+    db,
+    blockchain,
+    config,
+    authRateLimit,
+    admin,
+    verifyWallet: verifiedStaffWallet
+  });
+
   app.post("/admin/users", admin, async (req, res, next) => {
     try {
       const input = z.object({
         fullName: z.string().trim().min(2).max(200),
         email: z.string().trim().email().max(320),
-        password: z.string().min(12),
+        password: z.string().max(200).optional(),
         role: z.enum(["receptionist", "doctor", "reviewer", "hospital_staff"]),
         chainRole: z.string().trim().optional(),
+        linkWallet: z.enum(["now", "later"]).optional(),
         walletProof: z.object({ nonce: z.string(), signature: z.string() }).optional()
       }).parse(req.body);
       const chainRole = chainRoleFor(input.role, input.chainRole);
+      if (input.linkWallet === "later") {
+        const code = createActivationCode();
+        const expiresAt = activationExpiry(config);
+        const user = await db.createDeferredStaff({
+          email: input.email,
+          role: input.role,
+          hospitalId: req.user.hospital_id,
+          fullName: input.fullName,
+          chainRole: chainRole || null,
+          codeHash: hashActivationCode(code, config.identityCommitmentKey),
+          expiresAt
+        });
+        await recordActivity(db, {
+          actorId: req.user.id,
+          actorRole: req.user.role,
+          hospitalId: req.user.hospital_id,
+          action: "STAFF_ACCOUNT_CREATED",
+          category: "security",
+          outcome: "success",
+          resourceId: user.id,
+          metadata: { role: user.role }
+        }).catch(() => {});
+        await recordActivity(db, {
+          actorId: req.user.id,
+          actorRole: req.user.role,
+          hospitalId: req.user.hospital_id,
+          action: "ACTIVATION_CODE_ISSUED",
+          category: "security",
+          outcome: "success",
+          resourceId: user.id,
+          metadata: { role: user.role }
+        }).catch(() => {});
+        return res.status(201).json({
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          status: user.status,
+          activationCode: code,
+          activationExpiresAt: expiresAt
+        });
+      }
+      if (!input.password || input.password.length < 12) return res.status(400).json({ error: "Use at least 12 characters." });
       let authorization = null;
       if (isClinicalRole(input.role)) {
         const walletAddress = await verifiedStaffWallet({ ...input, chainRole });
         authorization = { walletAddress, chainRole };
       }
       const user = await db.createUser({ ...input, hospitalId: req.user.hospital_id, authorization });
+      await recordActivity(db, {
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        hospitalId: req.user.hospital_id,
+        action: "STAFF_ACCOUNT_CREATED",
+        category: "security",
+        outcome: "success",
+        resourceId: user.id,
+        metadata: { role: user.role }
+      }).catch(() => {});
       res.status(201).json({
         id: user.id,
         email: user.email,

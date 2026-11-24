@@ -7,7 +7,7 @@ const HOSPITAL_ZONE = "Asia/Kolkata";
 const CLINICAL_ACTIONS = new Set(["record_created", "record_viewed", "record_corrected", "record_anchored", "summary_exported"]);
 const VIEW_ACTIONS = new Set(["record_viewed", "intake_viewed", "PATIENT_LOOKUP", "PROFILE_VIEWED", "VISIT_HISTORY_VIEWED"]);
 const FILTERS = ["all", "profile", "records", "changes", "logins", "appointments", "consent"];
-const SENSITIVE_KEY = /password|secret|token|jwt|signature|recovery|ciphertext|reason|notes|content|diagnosis|prescription|medication|allergy/i;
+const SENSITIVE_KEY = /password|secret|token|jwt|signature|recovery|ciphertext|reason|notes|content|diagnosis|prescription|medication|allergy|activation/i;
 
 const PATIENT_PHRASES = {
   LOGIN_SUCCEEDED: "signed in",
@@ -47,6 +47,12 @@ const PATIENT_PHRASES = {
   ROLE_REVOKED: "revoked a staff role",
   ROLE_CHANGED: "changed a staff role",
   USER_DISABLED: "disabled a staff account",
+  STAFF_ACCOUNT_CREATED: "created a staff account",
+  ACTIVATION_CODE_ISSUED: "issued a staff activation code",
+  ACTIVATION_CODE_REGENERATED: "issued a replacement staff activation code",
+  ACTIVATION_FAILED: "had a staff activation attempt fail",
+  ACCOUNT_ACTIVATED: "activated a staff account",
+  WALLET_VERIFIED: "verified a staff wallet",
   PATIENT_REGISTERED: "registered a patient",
   PATIENT_REGISTRATION_PENDING: "started a patient registration",
   FILE_UPLOADED: "uploaded a medical file",
@@ -85,7 +91,7 @@ function categoryFor(action) {
   if (action === "FILE_VIEWED" || action === "FILE_DOWNLOADED") return "records";
   if (action === "FILE_ACCESS_DENIED") return "security";
   if (String(action).startsWith("ACCESS_") || String(action).startsWith("EMERGENCY_") || action === "WALLET_LINKED") return "consent";
-  if (["ROLE_ASSIGNED", "ROLE_REVOKED", "ROLE_CHANGED", "USER_DISABLED", "ACCESS_DENIED"].includes(action)) return "security";
+  if (["ROLE_ASSIGNED", "ROLE_REVOKED", "ROLE_CHANGED", "USER_DISABLED", "ACCESS_DENIED", "STAFF_ACCOUNT_CREATED", "ACTIVATION_CODE_ISSUED", "ACTIVATION_CODE_REGENERATED", "ACTIVATION_FAILED", "ACCOUNT_ACTIVATED", "WALLET_VERIFIED"].includes(action)) return "security";
   if (String(action).startsWith("PATIENT_") || String(action).startsWith("MATCH_")) return "registration";
   return "other";
 }

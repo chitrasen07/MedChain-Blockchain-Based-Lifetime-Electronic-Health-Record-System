@@ -18,6 +18,12 @@ function poolConfig(connectionString) {
   return options;
 }
 
+function sameHash(left, right) {
+  const actual = Buffer.from(String(left || ""));
+  const expected = Buffer.from(String(right || ""));
+  return actual.length > 0 && actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
 function createDb(config) {
   if (!config.databaseUrl) throw new Error("DATABASE_URL is required");
   const pool = new Pool(poolConfig(config.databaseUrl));
@@ -150,6 +156,146 @@ function createDb(config) {
         return user;
       });
     },
+    async createDeferredStaff({ email, role, hospitalId, fullName, chainRole, codeHash, expiresAt }) {
+      return transaction(async (client) => {
+        const passwordHash = hashPassword(crypto.randomBytes(32).toString("base64url"));
+        const result = await client.query(
+          "INSERT INTO users (email,password_hash,role,hospital_id,status,full_name) SELECT $1,$2,$3,id,'pending',$5 FROM hospitals WHERE id=$4 AND status='active' RETURNING id,email,role,hospital_id,status,full_name AS \"fullName\"",
+          [email.toLowerCase(), passwordHash, role, hospitalId, fullName]
+        );
+        if (!result.rowCount) throw Object.assign(new Error("Hospital not found or disabled"), { statusCode: 404 });
+        const user = result.rows[0];
+        await client.query(
+          "INSERT INTO staff_activation_codes (user_id,hospital_id,code_hash,chain_role,expires_at) VALUES ($1,$2,$3,$4,$5)",
+          [user.id, hospitalId, codeHash, chainRole || null, expiresAt]
+        );
+        return user;
+      });
+    },
+    async readStaffActivation(email, codeHash) {
+      return transaction(async (client) => {
+        const found = await client.query(
+          "SELECT id,email,full_name AS \"fullName\",role,status,hospital_id FROM users WHERE email=$1 FOR UPDATE",
+          [String(email || "").toLowerCase()]
+        );
+        const user = found.rows[0];
+        if (!user || user.role === "administrator") return { outcome: "invalid" };
+        const open = await client.query(
+          "SELECT id,code_hash AS \"codeHash\",expires_at AS \"expiresAt\",failed_attempts AS \"failedAttempts\",chain_role AS \"chainRole\",hospital_id AS \"hospitalId\" FROM staff_activation_codes WHERE user_id=$1 AND used_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+          [user.id]
+        );
+        const code = open.rows[0];
+        const context = { userId: user.id, hospitalId: user.hospital_id, role: user.role };
+        if (!code || code.hospitalId !== user.hospital_id) {
+          const prior = await client.query(
+            "SELECT code_hash AS \"codeHash\",used_at AS \"usedAt\",expires_at AS \"expiresAt\",failed_attempts AS \"failedAttempts\" FROM staff_activation_codes WHERE user_id=$1 ORDER BY created_at DESC LIMIT 8",
+            [user.id]
+          );
+          const match = prior.rows.find((row) => sameHash(row.codeHash, codeHash));
+          if (!match) return { outcome: "invalid" };
+          if (Number(match.failedAttempts) >= 5) return { outcome: "locked", ...context };
+          if (match.usedAt) return { outcome: "used", ...context };
+          return { outcome: "expired", ...context };
+        }
+        if (!sameHash(code.codeHash, codeHash)) {
+          const attempts = Number(code.failedAttempts) + 1;
+          await client.query(
+            "UPDATE staff_activation_codes SET failed_attempts=$2, used_at=CASE WHEN $2 >= 5 THEN now() ELSE used_at END WHERE id=$1",
+            [code.id, attempts]
+          );
+          return { outcome: attempts >= 5 ? "locked" : "invalid", ...context };
+        }
+        if (user.status !== "pending") return { outcome: "used", ...context };
+        if (new Date(code.expiresAt).getTime() <= Date.now()) return { outcome: "expired", ...context };
+        return {
+          outcome: "ready",
+          user: {
+            id: user.id,
+            email: user.email,
+            fullName: user.fullName,
+            role: user.role,
+            hospitalId: user.hospital_id,
+            chainRole: code.chainRole || ""
+          }
+        };
+      });
+    },
+    async completeStaffActivation({ userId, hospitalId, codeHash, password, walletAddress }) {
+      return transaction(async (client) => {
+        const open = await client.query(
+          "SELECT c.id,c.code_hash AS \"codeHash\",c.expires_at AS \"expiresAt\",c.failed_attempts AS \"failedAttempts\",c.chain_role AS \"chainRole\" FROM staff_activation_codes c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND u.hospital_id=$2 AND u.status='pending' AND c.used_at IS NULL AND c.hospital_id=$2 ORDER BY c.created_at DESC LIMIT 1 FOR UPDATE OF c, u",
+          [userId, hospitalId]
+        );
+        const code = open.rows[0];
+        if (!code) {
+          const prior = await client.query(
+            "SELECT code_hash AS \"codeHash\", used_at AS \"usedAt\" FROM staff_activation_codes WHERE user_id=$1 ORDER BY created_at DESC LIMIT 8",
+            [userId]
+          );
+          const match = prior.rows.find((row) => sameHash(row.codeHash, codeHash));
+          return { outcome: match?.usedAt ? "used" : "invalid" };
+        }
+        if (!sameHash(code.codeHash, codeHash)) return { outcome: "invalid" };
+        if (Number(code.failedAttempts) >= 5) return { outcome: "locked" };
+        if (new Date(code.expiresAt).getTime() <= Date.now()) return { outcome: "expired" };
+        const user = await client.query(
+          "UPDATE users SET password_hash=$2, status='active' WHERE id=$1 AND hospital_id=$3 AND status='pending' RETURNING id,email,role,status,hospital_id,full_name AS \"fullName\"",
+          [userId, hashPassword(password), hospitalId]
+        );
+        if (!user.rowCount) return { outcome: "invalid" };
+        let authorization = null;
+        if (walletAddress) {
+          if (!code.chainRole) throw Object.assign(new Error("This role cannot be granted on the blockchain."), { statusCode: 400 });
+          await client.query(
+            "INSERT INTO staff_chain_authorizations (user_id,wallet_address,chain_role,status,action) VALUES ($1,$2,$3,'pending','grant')",
+            [userId, walletAddress, code.chainRole]
+          );
+          authorization = { status: "pending", action: "grant", walletAddress, chainRole: code.chainRole };
+        }
+        const consumed = await client.query(
+          "UPDATE staff_activation_codes SET used_at=now() WHERE id=$1 AND used_at IS NULL RETURNING id",
+          [code.id]
+        );
+        if (!consumed.rowCount) return { outcome: "used" };
+        return { outcome: "activated", user: user.rows[0], authorization };
+      });
+    },
+    async reissueStaffActivation({ userId, hospitalId, codeHash, expiresAt }) {
+      return transaction(async (client) => {
+        const user = await client.query(
+          "SELECT id,role,status,hospital_id FROM users WHERE id=$1 AND hospital_id=$2 AND role<>'administrator' FOR UPDATE",
+          [userId, hospitalId]
+        );
+        if (!user.rowCount) return null;
+        if (user.rows[0].status !== "pending") {
+          throw Object.assign(new Error("This account is already activated."), { statusCode: 409 });
+        }
+        const previous = await client.query(
+          "SELECT chain_role FROM staff_activation_codes WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1",
+          [userId]
+        );
+        await client.query("UPDATE staff_activation_codes SET used_at=now() WHERE user_id=$1 AND used_at IS NULL", [userId]);
+        await client.query(
+          "INSERT INTO staff_activation_codes (user_id,hospital_id,code_hash,chain_role,expires_at) VALUES ($1,$2,$3,$4,$5)",
+          [userId, hospitalId, codeHash, previous.rows[0]?.chain_role || null, expiresAt]
+        );
+        return { role: user.rows[0].role };
+      });
+    },
+    async walletUsedByPatient(walletAddress) {
+      const result = await query(
+        "SELECT 1 FROM patients WHERE status='confirmed' AND controller IS NOT NULL AND lower(controller)=lower($1) LIMIT 1",
+        [walletAddress]
+      );
+      return result.rowCount > 0;
+    },
+    async walletUsedByStaff(walletAddress) {
+      const result = await query(
+        "SELECT 1 FROM staff_chain_authorizations WHERE lower(wallet_address)=lower($1) LIMIT 1",
+        [walletAddress]
+      );
+      return result.rowCount > 0;
+    },
     async createStaffWalletChallenge({ walletAddress, nonce, message, expiresAt }) {
       await query(
         "INSERT INTO staff_wallet_challenges (nonce,wallet_address,message,expires_at) VALUES ($1,$2,$3,$4)",
@@ -237,7 +383,11 @@ function createDb(config) {
         "UPDATE staff_chain_authorizations SET action='revoke', status='pending', updated_at=now() WHERE user_id=$1",
         [userId]
       );
-      await query("INSERT INTO audit_events (actor_id,action,resource_id,metadata) VALUES ($1,'USER_DISABLED',$2,$3)", [actorId, userId, JSON.stringify({ hospitalId })]);
+      await query("UPDATE staff_activation_codes SET used_at=now() WHERE user_id=$1 AND used_at IS NULL", [userId]);
+      await query(
+        "INSERT INTO audit_events (actor_id,hospital_id,action,category,outcome,resource_id,metadata) VALUES ($1,$2,'USER_DISABLED','security','success',$3,$4::jsonb)",
+        [actorId, hospitalId, userId, JSON.stringify({ hospitalId })]
+      );
     },
     async listConsentDoctors(hospitalId) {
       const result = await query(
@@ -248,7 +398,7 @@ function createDb(config) {
     },
     async listUsers(hospitalId) {
       const result = await query(
-        "SELECT u.id,u.email,u.full_name AS \"fullName\",u.role,u.status,u.created_at AS \"createdAt\",a.wallet_address AS \"walletAddress\",a.chain_role AS \"chainRole\",a.previous_chain_role AS \"previousChainRole\",a.previous_wallet_address AS \"previousWalletAddress\",a.status AS \"authorizationStatus\",a.action AS \"authorizationAction\",a.tx_hash AS \"authorizationTx\" FROM users u LEFT JOIN staff_chain_authorizations a ON a.user_id=u.id WHERE u.hospital_id=$1 ORDER BY u.created_at",
+        "SELECT u.id,u.email,u.full_name AS \"fullName\",u.role,u.status,u.created_at AS \"createdAt\",a.wallet_address AS \"walletAddress\",a.chain_role AS \"chainRole\",a.previous_chain_role AS \"previousChainRole\",a.previous_wallet_address AS \"previousWalletAddress\",a.status AS \"authorizationStatus\",a.action AS \"authorizationAction\",a.tx_hash AS \"authorizationTx\",activation.chain_role AS \"pendingChainRole\",activation.expires_at AS \"activationExpiresAt\" FROM users u LEFT JOIN staff_chain_authorizations a ON a.user_id=u.id LEFT JOIN LATERAL (SELECT chain_role,expires_at FROM staff_activation_codes WHERE user_id=u.id AND used_at IS NULL ORDER BY created_at DESC LIMIT 1) activation ON true WHERE u.hospital_id=$1 ORDER BY u.created_at",
         [hospitalId]
       );
       return result.rows;

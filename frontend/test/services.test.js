@@ -78,6 +78,11 @@ describe("patient and visit requests", () => {
     const staff = validateStaffAccount({ email: "doctor@hospital.test", password: "short", role: "administrator" });
     assert.equal(Boolean(staff.errors.password), true);
     assert.equal(Boolean(staff.errors.role), true);
+    const deferred = validateStaffAccount({ fullName: "Clinical Doctor", email: "doctor@hospital.test", role: "doctor", linkWallet: "later" });
+    assert.equal(Object.keys(deferred.errors).length, 0);
+    assert.equal(deferred.body.linkWallet, "later");
+    assert.equal(Object.hasOwn(deferred.body, "password"), false);
+    assert.equal(Object.hasOwn(deferred.body, "walletProof"), false);
     const decision = validateDecision({ decision: "same_patient", candidatePatientId: "other", notes: "" }, ["candidate-1"]);
     assert.equal(Boolean(decision.errors.candidatePatientId), true);
   });
