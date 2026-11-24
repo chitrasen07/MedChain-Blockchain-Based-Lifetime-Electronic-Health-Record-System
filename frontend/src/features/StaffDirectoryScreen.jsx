@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
@@ -17,6 +18,8 @@ import { pageChrome } from "../lib/pageChrome";
 import { sepoliaTransactionUrl } from "../lib/ownership";
 import { connectPatientWallet, signPatientLogin } from "../lib/patientWallet";
 import { roleLabel } from "../lib/roles";
+import { staffWalletState, walletStatusTone } from "../lib/staffWallet";
+import { shortWallet } from "../services/patientPortal";
 import { sendRoleTransaction } from "../lib/roleChain";
 import { HOSPITAL_STAFF_CHAIN_ROLES, STAFF_CREATE_ROLES, adminService, clinicalRole, validateStaffAccount } from "../services/adminService";
 
@@ -63,11 +66,84 @@ function profileLabel(accountRow) {
   return "Incomplete";
 }
 
-function walletLabel(accountRow) {
-  if (!clinicalRole(accountRow.role)) return "Not required";
-  if (!accountRow.walletAddress) return "Verification pending";
-  const address = accountRow.walletAddress;
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+function CopyWalletButton({ address }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="inline-flex h-8 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-navy hover:bg-canvas"
+      title="Copy wallet address"
+      aria-label={copied ? "Copied!" : "Copy wallet address"}
+      onClick={copy}
+    >
+      {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+      {copied ? <span aria-live="polite">Copied!</span> : <span className="sr-only">Copy wallet address</span>}
+    </button>
+  );
+}
+
+function ProfileWallet({ accountRow }) {
+  const wallet = staffWalletState(accountRow);
+  return (
+    <div>
+      <StatusBadge tone={walletStatusTone(wallet.state)}>{wallet.label}</StatusBadge>
+      {wallet.address ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="break-all font-mono text-sm text-ink" title={wallet.address}>{wallet.address}</span>
+          <CopyWalletButton address={wallet.address} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WalletAddress({ accountRow }) {
+  const wallet = staffWalletState(accountRow);
+  const [open, setOpen] = useState(false);
+  const short = wallet.address ? shortWallet(wallet.address) : "";
+  return (
+    <div className="min-w-[11rem]">
+      <StatusBadge tone={walletStatusTone(wallet.state)}>{wallet.label}</StatusBadge>
+      {wallet.address ? (
+        <div className="mt-1">
+          <div className="flex items-center gap-1 whitespace-nowrap">
+            <span className="font-mono text-xs text-ink" title={wallet.address}>{short}</span>
+            <CopyWalletButton address={wallet.address} />
+          </div>
+          <button
+            type="button"
+            className="mt-1 text-xs font-medium whitespace-nowrap text-teal"
+            title="View full address"
+            aria-expanded={open}
+            onClick={() => setOpen((current) => !current)}
+          >
+            View full address
+          </button>
+          {open ? (
+            <div className="mt-2 max-w-[14rem] rounded-lg border border-line bg-canvas p-2">
+              <p className="break-all font-mono text-xs text-ink">{wallet.address}</p>
+              <CopyWalletButton address={wallet.address} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function StaffDirectoryScreen({ pageKey }) {
@@ -452,36 +528,36 @@ export function StaffDirectoryScreen({ pageKey }) {
     const explorer = sepoliaTransactionUrl(accountRow.authorizationTx);
     return {
       id: accountRow.id,
-      name: accountRow.fullName || "Not recorded",
-      email: accountRow.email,
+      name: <span className="block max-w-[10rem] whitespace-normal">{accountRow.fullName || "Not recorded"}</span>,
+      email: <span className="block max-w-[12rem] break-all">{accountRow.email}</span>,
       role: roleLabel(accountRow.role),
       specialty: accountRow.role === "doctor" ? (accountRow.specialization || "Not provided") : "",
       credentials: profileLabel(accountRow),
       status: <StatusBadge tone={accountRow.status === "active" ? "success" : accountRow.status === "pending" ? "warning" : "danger"}>{accountLabel(accountRow.status)}</StatusBadge>,
       authorization: <StatusBadge tone={authorizationTone(label)}>{label}</StatusBadge>,
-      wallet: <span title={accountRow.walletAddress || undefined}>{walletLabel(accountRow)}</span>,
-      transaction: explorer ? <a className="text-teal" href={explorer} target="_blank" rel="noreferrer">View</a> : "",
+      wallet: <WalletAddress accountRow={accountRow} />,
+      transaction: explorer ? <a className="whitespace-nowrap text-teal" href={explorer} target="_blank" rel="noreferrer">View</a> : "",
       action: (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap gap-2">
           {accountRow.status !== "disabled" && accountRow.id !== user?.id ? (
-            <Button size="sm" variant="danger" onClick={() => setTarget(accountRow)}>Disable</Button>
+            <Button className="whitespace-nowrap" size="sm" variant="danger" onClick={() => setTarget(accountRow)}>Disable</Button>
           ) : accountRow.id === user?.id ? "Signed-in account" : "Disabled"}
           {accountRow.role === "doctor" ? (
-            <Button size="sm" variant="secondary" onClick={() => openProfile(accountRow)} disabled={Boolean(busy)}>View profile</Button>
+            <Button className="whitespace-nowrap" size="sm" variant="secondary" onClick={() => openProfile(accountRow)} disabled={Boolean(busy)}>View profile</Button>
           ) : null}
           {accountRow.role === "doctor" && accountRow.profileStatus === "pending" ? (
-            <Button size="sm" variant="secondary" onClick={() => openProfile(accountRow)} disabled={Boolean(busy)}>Review credentials</Button>
+            <Button className="whitespace-nowrap" size="sm" variant="secondary" onClick={() => openProfile(accountRow)} disabled={Boolean(busy)}>Review credentials</Button>
           ) : null}
           {accountRow.status === "pending" && accountRow.id !== user?.id ? (
-            <Button size="sm" variant="secondary" onClick={() => regenerateCode(accountRow)} disabled={Boolean(busy)}>Regenerate activation code</Button>
+            <Button className="whitespace-nowrap" size="sm" variant="secondary" onClick={() => regenerateCode(accountRow)} disabled={Boolean(busy)}>Regenerate activation code</Button>
           ) : null}
           {accountRow.status === "active" && accountRow.id !== user?.id && (label === "Pending" || label === "Failed") ? (
-            <Button size="sm" variant="secondary" onClick={() => accountRow.walletAddress ? retryAuthorization(accountRow) : linkExisting(accountRow)} disabled={Boolean(busy)}>
+            <Button className="whitespace-nowrap" size="sm" variant="secondary" onClick={() => accountRow.walletAddress ? retryAuthorization(accountRow) : linkExisting(accountRow)} disabled={Boolean(busy)}>
               {accountRow.walletAddress ? "Approve blockchain role" : "Link wallet"}
             </Button>
           ) : null}
           {accountRow.id !== user?.id && accountRow.role !== "administrator" && accountRow.status === "active" ? (
-            <Button size="sm" variant="secondary" onClick={() => { setRoleTarget(accountRow); setNextRole(accountRow.role); }}>Change role</Button>
+            <Button className="whitespace-nowrap" size="sm" variant="secondary" onClick={() => { setRoleTarget(accountRow); setNextRole(accountRow.role); }}>Change role</Button>
           ) : null}
         </div>
       ),
@@ -500,6 +576,7 @@ export function StaffDirectoryScreen({ pageKey }) {
         ) : null}
         {users && !loadError ? (
           <DataTable
+            density="compact"
             columns={[
               { key: "name", header: "Name" },
               { key: "email", header: "Email" },
@@ -508,7 +585,7 @@ export function StaffDirectoryScreen({ pageKey }) {
               { key: "credentials", header: "Credentials" },
               { key: "status", header: "Account activation" },
               { key: "authorization", header: "Blockchain authorization" },
-              { key: "wallet", header: "Wallet" },
+              { key: "wallet", header: "Wallet verification" },
               { key: "transaction", header: "Transaction" },
               { key: "action", header: "Action" },
             ]}
@@ -521,6 +598,10 @@ export function StaffDirectoryScreen({ pageKey }) {
       {profileView ? (
         <Card className="mt-4" title={profileView.fullName || "Doctor profile"} description={`${profileView.hospitalName || "Hospital"} · ${profileLabel({ role: "doctor", profileStatus: profileView.verificationStatus })}`}>
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <dt className="text-muted">Wallet verification</dt>
+              <dd className="mt-1"><ProfileWallet accountRow={(users || []).find((row) => row.id === profileView.id)} /></dd>
+            </div>
             <div><dt className="text-muted">Specialization</dt><dd>{profileView.specialization || "Not provided"}</dd></div>
             <div><dt className="text-muted">Experience</dt><dd>{Number.isInteger(profileView.experienceYears) ? `${profileView.experienceYears} years` : "Not provided"}</dd></div>
             <div><dt className="text-muted">Registration</dt><dd>{profileView.registrationNumber || "Not provided"}{profileView.registrationCouncil ? ` · ${profileView.registrationCouncil}` : ""}</dd></div>
