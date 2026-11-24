@@ -808,7 +808,15 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
       const member = await db.getStaffMember(req.params.id, req.user.hospital_id);
       if (!member?.walletAddress || !member.chainRole) return res.status(404).json({ error: "User not found" });
       if (typeof blockchain.hasChainRole !== "function") return res.status(503).json({ error: "Service unavailable" });
-      const holds = async (role, wallet) => role && wallet ? Boolean(await blockchain.hasChainRole(role, wallet)) : false;
+      const holds = async (role, wallet) => {
+        if (!role || !wallet) return false;
+        try {
+          return Boolean(await blockchain.hasChainRole(role, wallet));
+        } catch (error) {
+          console.error("staff authorization chain check failed", error?.code || error?.name || "Error");
+          throw Object.assign(new Error("Service unavailable"), { statusCode: 503 });
+        }
+      };
       const desiredHeld = await holds(member.chainRole, member.walletAddress);
       const previousRole = member.previousChainRole && member.previousChainRole !== member.chainRole ? member.previousChainRole : "";
       const previousWallet = member.previousWalletAddress && member.previousWalletAddress !== member.walletAddress ? member.previousWalletAddress : "";
@@ -925,7 +933,7 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
         : error;
     const publicStatus = [400, 401, 403, 404, 409].includes(publicError.statusCode) ? publicError.statusCode : publicError.statusCode === 503 ? 503 : 500;
     const publicMessage = publicStatus === 503 ? "Service unavailable" : publicStatus === 500 ? "Internal server error" : publicError.message;
-    if (publicStatus >= 500) console.error("request failed");
+    if (publicStatus >= 500) console.error(publicStatus === 503 ? "request unavailable" : "request failed", publicError.code || publicError.name || "Error");
     else console.error("request rejected", publicStatus);
     res.status(publicStatus).json({ error: publicMessage });
   });

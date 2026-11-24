@@ -133,3 +133,62 @@ test("verify marks an already granted doctor role active without another transac
   assert.equal(calls.includes("mark:active"), true);
   assert.equal(calls.includes("createUser"), false);
 });
+
+test("authorization verify rejects missing and non-admin sessions", async () => {
+  const { app } = appFor();
+  const missing = await request(app).post("/admin/users/staff-1/authorization/verify");
+  assert.equal(missing.status, 401);
+  const doctor = { id: "doc", role: "doctor", hospital_id: "hospital-a", status: "active", token_version: 0 };
+  const denied = createApp({
+    db: { async getUserForAuth(id) { return id === doctor.id ? doctor : null; } },
+    blockchain: { async hasChainRole() { throw new Error("should not run"); } },
+    config: { corsOrigin: false, jwtSecret: secret }
+  });
+  const response = await request(denied)
+    .post("/admin/users/staff-1/authorization/verify")
+    .set("Authorization", `Bearer ${issueToken(doctor, secret)}`);
+  assert.equal(response.status, 403);
+});
+
+test("authorization verify returns 503 when Sepolia cannot be read and does not activate the role", async () => {
+  const calls = [];
+  const member = {
+    id: "staff-1",
+    role: "doctor",
+    status: "active",
+    walletAddress: "0xf7d8e63eb6d81c4faded4fdda7edb10d28b54bb0",
+    chainRole: "DOCTOR",
+    authorizationStatus: "pending",
+    authorizationAction: "grant"
+  };
+  const app = createApp({
+    db: {
+      async getUserForAuth(id) { return id === admin.id ? admin : null; },
+      async getStaffMember(id, hospitalId) {
+        calls.push(`lookup:${hospitalId}:${id}`);
+        return hospitalId === admin.hospital_id && id === member.id ? member : null;
+      },
+      async markStaffAuthorization() { calls.push("mark:active"); }
+    },
+    blockchain: {
+      async hasChainRole() {
+        const error = new Error("rpc down");
+        error.code = "NETWORK_ERROR";
+        throw error;
+      }
+    },
+    config: { corsOrigin: false, jwtSecret: secret }
+  });
+  const unavailable = await request(app)
+    .post("/admin/users/staff-1/authorization/verify")
+    .set("Authorization", `Bearer ${issueToken(admin, secret)}`);
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.error, "Service unavailable");
+  const hidden = await request(app)
+    .post("/admin/users/other-hospital-staff/authorization/verify")
+    .set("Authorization", `Bearer ${issueToken(admin, secret)}`);
+  assert.equal(hidden.status, 404);
+  assert.equal(calls.includes("mark:active"), false);
+  assert.equal(calls.includes("lookup:hospital-a:staff-1"), true);
+  assert.equal(calls.includes("lookup:hospital-a:other-hospital-staff"), true);
+});

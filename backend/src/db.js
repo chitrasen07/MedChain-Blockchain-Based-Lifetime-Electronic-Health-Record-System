@@ -188,7 +188,7 @@ function createDb(config) {
     },
     async markStaffAuthorization(userId, hospitalId, status, txHash) {
       const result = await query(
-        "UPDATE staff_chain_authorizations AS authorization SET status=$3, tx_hash=COALESCE($4, authorization.tx_hash), updated_at=now() FROM users WHERE users.id=authorization.user_id AND users.id=$1 AND users.hospital_id=$2 RETURNING authorization.status",
+        "UPDATE staff_chain_authorizations AS staff_grant SET status=$3, tx_hash=COALESCE($4, staff_grant.tx_hash), updated_at=now() FROM users WHERE users.id=staff_grant.user_id AND users.id=$1 AND users.hospital_id=$2 RETURNING staff_grant.status",
         [userId, hospitalId, status, txHash || null]
       );
       if (!result.rowCount) throw Object.assign(new Error("User not found"), { statusCode: 404 });

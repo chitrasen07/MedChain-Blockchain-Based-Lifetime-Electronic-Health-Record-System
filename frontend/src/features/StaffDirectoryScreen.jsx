@@ -73,28 +73,41 @@ export function StaffDirectoryScreen({ pageKey }) {
     document.title = `${page.title} · MedChain`;
   }, [page.title]);
 
+  function showDirectory({ list, synced, chainUnavailable }) {
+    setUsers(list);
+    if (chainUnavailable) setNotice("Sepolia could not be checked. Staff accounts are unchanged.");
+    else if (synced) setNotice("The blockchain role is already active. No new transaction was sent.");
+  }
+
   async function listAndSync() {
     const result = await adminService.listUsers();
     let list = Array.isArray(result?.users) ? result.users : [];
     const pending = list.filter((row) => row.authorizationStatus === "pending" && row.walletAddress && row.chainRole);
     let synced = false;
+    let chainUnavailable = false;
     for (const row of pending) {
-      const verified = await adminService.verifyAuthorization(row.id);
-      if (verified?.verified) synced = true;
+      try {
+        const verified = await adminService.verifyAuthorization(row.id);
+        if (verified?.verified) synced = true;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 503) {
+          chainUnavailable = true;
+          continue;
+        }
+        throw error;
+      }
     }
     if (synced) {
       const again = await adminService.listUsers();
       list = Array.isArray(again?.users) ? again.users : list;
     }
-    return { list, synced };
+    return { list, synced, chainUnavailable };
   }
 
   async function load() {
     setLoadError("");
     try {
-      const { list, synced } = await listAndSync();
-      setUsers(list);
-      if (synced) setNotice("The blockchain role is already active. No new transaction was sent.");
+      showDirectory(await listAndSync());
     } catch (error) {
       setUsers([]);
       setLoadError(requestMessage(error));
@@ -103,10 +116,9 @@ export function StaffDirectoryScreen({ pageKey }) {
 
   useEffect(() => {
     let active = true;
-    listAndSync().then(({ list, synced }) => {
+    listAndSync().then((result) => {
       if (!active) return;
-      setUsers(list);
-      if (synced) setNotice("The blockchain role is already active. No new transaction was sent.");
+      showDirectory(result);
     }).catch((error) => {
       if (!active) return;
       setUsers([]);

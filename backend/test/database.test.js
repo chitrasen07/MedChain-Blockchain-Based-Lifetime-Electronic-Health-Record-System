@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const { createApp } = require("../src/app");
 const { createDb } = require("../src/db");
 const { migrationFiles } = require("../src/migrate");
@@ -45,4 +46,13 @@ test("migration files are ordered and versioned by filename", async () => {
     "016_activity_audit.sql",
     "017_medical_files.sql"
   ]);
+});
+
+test("staff authorization update does not use the reserved AUTHORIZATION alias", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../src/db.js"), "utf8");
+  const start = source.indexOf("async markStaffAuthorization");
+  const update = source.slice(start, source.indexOf("async clearStaffAuthorization"));
+  assert.match(update, /AS staff_grant/);
+  assert.doesNotMatch(update, /\bAS authorization\b/);
+  assert.doesNotMatch(update, /\bauthorization\./);
 });
