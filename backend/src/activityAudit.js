@@ -53,6 +53,10 @@ const PATIENT_PHRASES = {
   ACTIVATION_FAILED: "had a staff activation attempt fail",
   ACCOUNT_ACTIVATED: "activated a staff account",
   WALLET_VERIFIED: "verified a staff wallet",
+  PROFILE_UPDATED: "updated a professional profile",
+  PROFILE_SUBMITTED: "submitted professional credentials for review",
+  PROFILE_APPROVED: "approved professional credentials",
+  PROFILE_CHANGES_REQUESTED: "asked for professional credential changes",
   PATIENT_REGISTERED: "registered a patient",
   PATIENT_REGISTRATION_PENDING: "started a patient registration",
   FILE_UPLOADED: "uploaded a medical file",
@@ -85,7 +89,7 @@ const STAFF_PHRASES = {
 function categoryFor(action) {
   if (String(action).startsWith("APPOINTMENT_")) return "appointment";
   if (["LOGIN_SUCCEEDED", "LOGIN_FAILED", "LOGOUT", "SESSION_REVOKED", "SESSION_EXPIRED", "WALLET_AUTHENTICATED"].includes(action)) return "login";
-  if (["PATIENT_LOOKUP", "PROFILE_VIEWED"].includes(action)) return "profile";
+  if (["PATIENT_LOOKUP", "PROFILE_VIEWED", "PROFILE_UPDATED", "PROFILE_SUBMITTED", "PROFILE_APPROVED", "PROFILE_CHANGES_REQUESTED"].includes(action)) return "profile";
   if (["record_viewed", "intake_viewed", "VISIT_HISTORY_VIEWED", "summary_exported"].includes(action)) return "records";
   if (["record_created", "record_corrected", "record_anchored", "demographic_corrected", "intake_created", "intake_reviewed", "intake_rejected", "FILE_UPLOADED"].includes(action)) return "changes";
   if (action === "FILE_VIEWED" || action === "FILE_DOWNLOADED") return "records";

@@ -77,6 +77,12 @@ export function createAdminService(client = apiClient) {
     disableUser(id) {
       return client.request(`/admin/users/${encodeURIComponent(id)}/disable`, { method: "POST" });
     },
+    doctorProfile(id) {
+      return client.request(`/admin/doctors/${encodeURIComponent(id)}/profile`);
+    },
+    reviewDoctorProfile(id, body) {
+      return client.request(`/admin/doctors/${encodeURIComponent(id)}/profile/review`, { method: "POST", body });
+    },
     reissueActivation(id) {
       return client.request(`/admin/users/${encodeURIComponent(id)}/activation-code`, { method: "POST" });
     },

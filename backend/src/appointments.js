@@ -205,7 +205,7 @@ const ROW_SQL = `
     a.doctor_id AS "doctorId",
     u.full_name AS "doctorName",
     h.name AS "hospitalName",
-    NULL::text AS specialization,
+    (SELECT specialization FROM doctor_profiles WHERE user_id = a.doctor_id) AS specialization,
     a.requested_start AS "requestedStart",
     a.confirmed_start AS "confirmedStart",
     a.confirmed_end AS "confirmedEnd",
@@ -236,10 +236,16 @@ function createPgAppointmentStore(db) {
   return {
     async listDoctors(hospitalId) {
       const result = await db.query(
-        `SELECT u.id, u.full_name AS "fullName", h.name AS "hospitalName", NULL::text AS specialization
+        `SELECT u.id, u.full_name AS "fullName", h.name AS "hospitalName",
+            p.specialization, p.department, p.experience_years AS "experienceYears",
+            p.designation, p.languages, p.consultation_hours AS "consultationHours", p.biography,
+            COALESCE(p.status, 'incomplete') AS "verificationStatus",
+            (p.photo_key IS NOT NULL) AS "photoAvailable",
+            (SELECT string_agg(q.degree, ', ' ORDER BY q.position) FROM doctor_qualifications q WHERE q.user_id = u.id) AS degrees
          FROM users u
          JOIN hospitals h ON h.id = u.hospital_id
          JOIN staff_chain_authorizations s ON s.user_id = u.id
+         LEFT JOIN doctor_profiles p ON p.user_id = u.id
          WHERE u.hospital_id = $1 AND u.role = 'doctor' AND u.status = 'active' AND h.status = 'active'
            AND s.status = 'active' AND s.action = 'grant' AND s.chain_role = 'DOCTOR' AND s.wallet_address IS NOT NULL
          ORDER BY u.full_name NULLS LAST, u.created_at`,
@@ -418,7 +424,21 @@ function createMemoryAppointmentStore() {
     async listDoctors(hospitalId) {
       return doctors
         .filter((doctor) => doctor.hospitalId === hospitalId && doctor.verified)
-        .map((doctor) => ({ id: doctor.id, fullName: doctor.fullName, hospitalName: doctor.hospitalName, specialization: doctor.specialization || null }));
+        .map((doctor) => ({
+          id: doctor.id,
+          fullName: doctor.fullName,
+          hospitalName: doctor.hospitalName,
+          specialization: doctor.specialization || null,
+          department: doctor.department || null,
+          experienceYears: Number.isInteger(doctor.experienceYears) ? doctor.experienceYears : null,
+          designation: doctor.designation || null,
+          languages: doctor.languages || null,
+          consultationHours: doctor.consultationHours || null,
+          biography: doctor.biography || null,
+          degrees: doctor.degrees || null,
+          verificationStatus: doctor.verificationStatus || "incomplete",
+          photoAvailable: Boolean(doctor.photoAvailable)
+        }));
     },
     async doctorIsVerified(doctorId, hospitalId) {
       return doctors.some((doctor) => doctor.id === doctorId && doctor.hospitalId === hospitalId && doctor.verified);
@@ -540,7 +560,16 @@ function registerAppointments(app, { db, config = {}, store } = {}) {
           fullName: item.fullName || "Doctor",
           hospitalName: item.hospitalName,
           specialization: item.specialization || null,
-          availability: null
+          department: item.department || null,
+          experienceYears: Number.isInteger(Number(item.experienceYears)) && item.experienceYears !== null && item.experienceYears !== "" ? Number(item.experienceYears) : null,
+          designation: item.designation || null,
+          languages: item.languages || null,
+          consultationHours: item.consultationHours || null,
+          biography: item.biography || null,
+          degrees: item.degrees || null,
+          verificationStatus: item.verificationStatus || "incomplete",
+          photoAvailable: Boolean(item.photoAvailable),
+          availability: item.consultationHours || null
         }))
       });
     } catch (error) { next(error); }

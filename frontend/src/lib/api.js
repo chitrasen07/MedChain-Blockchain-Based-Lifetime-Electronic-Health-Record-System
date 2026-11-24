@@ -58,6 +58,11 @@ const PUBLIC_REQUEST_MESSAGES = new Set([
   "This wallet cannot be used for this staff role.",
   "This account is already activated.",
   "Use at least 12 characters.",
+  "Check the professional profile and try again.",
+  "Doctor profile not found.",
+  "This profile is not waiting for credential review.",
+  "Profile photos must be a JPEG, PNG, or WebP image under 2 MB.",
+  "Profile photo storage is not configured.",
   "Enter the staff member's name.",
   "A patient with this identity commitment is already registered.",
   "Candidate is not part of this review.",
@@ -281,7 +286,7 @@ export function createApiClient({ baseUrl, fetchImpl = globalThis.fetch } = {}) 
       }
     },
     async download(path) {
-      const headers = { Accept: "application/pdf, image/png, image/jpeg", "X-Medchain-Request": "1" };
+      const headers = { Accept: "application/pdf, image/png, image/jpeg, image/webp", "X-Medchain-Request": "1" };
       if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
       const response = await fetchImpl(`${resolveBase(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`, {
         headers,

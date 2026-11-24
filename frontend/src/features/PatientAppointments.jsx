@@ -19,6 +19,117 @@ import {
   visitLine,
 } from "../lib/appointments";
 
+function credential(value) {
+  return value || "Not provided";
+}
+
+function verificationLabel(status) {
+  if (status === "verified") return "Credentials verified";
+  if (status === "pending") return "Credentials pending verification";
+  if (status === "changes_requested") return "Credential changes requested";
+  return "Credentials incomplete";
+}
+
+function degreeText(doctor) {
+  if (Array.isArray(doctor.degrees)) return doctor.degrees.filter(Boolean).join(", ");
+  return doctor.degrees || "";
+}
+
+function experienceText(value) {
+  return Number.isInteger(value) ? `${value} years` : "Not provided";
+}
+
+function DoctorAvatar({ name, photoAvailable, path }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    if (!photoAvailable || !path) return undefined;
+    let active = true;
+    let objectUrl = "";
+    apiClient.download(path).then((blob) => {
+      if (!active) return;
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    }, () => { if (active) setUrl(""); });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [photoAvailable, path]);
+  const initials = String(name || "Dr").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  if (url) return <img src={url} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" />;
+  return <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-canvas text-xs font-semibold text-navy" aria-hidden="true">{initials || "Dr"}</div>;
+}
+
+function DoctorCard({ doctor, selected, onBook, onView }) {
+  const verified = doctor.verificationStatus === "verified";
+  return (
+    <article className={`rounded-xl border px-4 py-3 ${selected ? "border-teal bg-teal/5" : "border-line bg-surface"}`}>
+      <div className="flex items-start gap-3">
+        <DoctorAvatar name={doctor.fullName} photoAvailable={doctor.photoAvailable} path={`/patient-portal/doctors/${doctor.id}/photo`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <h3 className="text-sm font-semibold text-navy">{doctor.fullName}</h3>
+            <StatusBadge tone={verified ? "success" : "warning"}>{verificationLabel(doctor.verificationStatus)}</StatusBadge>
+          </div>
+          <p className="mt-1 text-sm text-muted">{credential(degreeText(doctor))} · {credential(doctor.hospitalName)}</p>
+        </div>
+      </div>
+      <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+        <div><dt className="text-muted">Specialization</dt><dd>{credential(doctor.specialization)}</dd></div>
+        <div><dt className="text-muted">Experience</dt><dd>{experienceText(doctor.experienceYears)}</dd></div>
+        <div><dt className="text-muted">Department</dt><dd>{credential(doctor.department)}</dd></div>
+        <div><dt className="text-muted">Consultation hours</dt><dd>{credential(doctor.consultationHours)}</dd></div>
+      </dl>
+      {verified ? null : <p className="mt-2 text-xs leading-5 text-muted">These professional details are not verified credentials.</p>}
+      <div className="mt-3 flex gap-2">
+        <Button type="button" size="sm" variant="secondary" onClick={onView}>View profile</Button>
+        <Button type="button" size="sm" onClick={onBook}>Book appointment</Button>
+      </div>
+    </article>
+  );
+}
+
+function DoctorProfilePanel({ doctor, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    let active = true;
+    apiClient.request(`/patient-portal/doctors/${doctor.id}`).then((data) => {
+      if (active) setDetail(data);
+    }, (error) => {
+      if (active) setMessage(error instanceof ApiError ? messageForRequest(error) : "The profile could not be opened.");
+    });
+    return () => { active = false; };
+  }, [doctor.id]);
+  const verified = detail?.verificationStatus === "verified";
+  return (
+    <div className="mt-4 rounded-xl border border-line bg-canvas px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-sm font-semibold text-navy">{doctor.fullName}</h3>
+        <Button type="button" size="sm" variant="secondary" onClick={onClose}>Close</Button>
+      </div>
+      {message ? <p className="mt-3 text-sm text-danger">{message}</p> : null}
+      {!detail && !message ? <LoadingSkeleton label="Loading profile" /> : null}
+      {detail ? (
+        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+          <div><dt className="text-muted">Verification</dt><dd>{verificationLabel(detail.verificationStatus)}</dd></div>
+          <div><dt className="text-muted">Hospital</dt><dd>{credential(detail.hospitalName)}</dd></div>
+          <div><dt className="text-muted">Specialization</dt><dd>{credential(detail.specialization)}</dd></div>
+          <div><dt className="text-muted">Experience</dt><dd>{experienceText(detail.experienceYears)}</dd></div>
+          <div><dt className="text-muted">Department</dt><dd>{credential(detail.department)}</dd></div>
+          <div><dt className="text-muted">Languages</dt><dd>{credential(detail.languages)}</dd></div>
+          <div className="sm:col-span-2"><dt className="text-muted">Biography</dt><dd>{credential(detail.biography)}</dd></div>
+          <div className="sm:col-span-2">
+            <dt className="text-muted">Education</dt>
+            <dd>{detail.qualifications?.length ? detail.qualifications.map((item) => `${item.degree}, ${item.institution}${item.graduationYear ? ` (${item.graduationYear})` : ""}`).join("; ") : "Not provided"}</dd>
+          </div>
+          {verified ? null : <p className="sm:col-span-2 text-xs leading-5 text-muted">These professional details are not verified credentials.</p>}
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
 function AppointmentFacts({ appointment, confirmed = false }) {
   return (
     <dl className="grid gap-3 sm:grid-cols-2">
@@ -26,12 +137,10 @@ function AppointmentFacts({ appointment, confirmed = false }) {
         <dt className="text-xs font-medium tracking-wide text-muted uppercase">Doctor</dt>
         <dd className="mt-1 text-sm text-ink">{appointment.doctorName}</dd>
       </div>
-      {appointment.specialization ? (
-        <div>
-          <dt className="text-xs font-medium tracking-wide text-muted uppercase">Specialization</dt>
-          <dd className="mt-1 text-sm text-ink">{appointment.specialization}</dd>
-        </div>
-      ) : null}
+      <div>
+        <dt className="text-xs font-medium tracking-wide text-muted uppercase">Specialization</dt>
+        <dd className="mt-1 text-sm text-ink">{appointment.specialization || "Not provided"}</dd>
+      </div>
       <div>
         <dt className="text-xs font-medium tracking-wide text-muted uppercase">Hospital</dt>
         <dd className="mt-1 text-sm text-ink">{appointment.hospitalName}</dd>
@@ -85,7 +194,11 @@ export function PatientAppointmentsPage() {
   const feed = useAppointmentFeed("/patient-portal/appointments", { notify: true });
   const [doctors, setDoctors] = useState({ phase: "loading", items: [], message: "" });
   const [query, setQuery] = useState("");
+  const [specialty, setSpecialty] = useState("");
+  const [department, setDepartment] = useState("");
+  const [experience, setExperience] = useState("");
   const [doctorId, setDoctorId] = useState("");
+  const [viewed, setViewed] = useState(null);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [reason, setReason] = useState("");
@@ -100,8 +213,7 @@ export function PatientAppointmentsPage() {
 
   useEffect(() => {
     let active = true;
-    const path = query.trim() ? `/patient-portal/appointments/doctors?q=${encodeURIComponent(query.trim())}` : "/patient-portal/appointments/doctors";
-    apiClient.request(path).then(
+    apiClient.request("/patient-portal/appointments/doctors").then(
       (data) => {
         if (active) setDoctors({ phase: "ready", items: data.doctors, message: "" });
       },
@@ -117,7 +229,7 @@ export function PatientAppointmentsPage() {
     return () => {
       active = false;
     };
-  }, [query]);
+  }, []);
 
   async function submit(event) {
     event.preventDefault();
@@ -155,13 +267,24 @@ export function PatientAppointmentsPage() {
   }
 
   const appointments = feed.data?.appointments || [];
+  const minimumExperience = Number(experience);
+  const visibleDoctors = doctors.items.filter((doctor) => {
+    const name = String(doctor.fullName || "").toLowerCase();
+    const focus = String(doctor.specialization || "").toLowerCase();
+    const unit = String(doctor.department || "").toLowerCase();
+    if (query.trim() && !name.includes(query.trim().toLowerCase())) return false;
+    if (specialty.trim() && !focus.includes(specialty.trim().toLowerCase())) return false;
+    if (department.trim() && !unit.includes(department.trim().toLowerCase())) return false;
+    if (experience.trim() && Number.isFinite(minimumExperience) && (doctor.experienceYears ?? -1) < minimumExperience) return false;
+    return true;
+  });
 
   return (
     <div>
       <PageHeader
         eyebrow="Patient"
         title="Appointments"
-        description={`Request a visit with a verified doctor. Times use ${HOSPITAL_ZONE_LABEL}. The doctor confirms when and where you should come.`}
+        description={`Request a visit with a doctor authorized by your hospital. Times use ${HOSPITAL_ZONE_LABEL}. The doctor confirms when and where you should come.`}
         crumbs={[{ label: "Patient", to: "/patient" }, { label: "Appointments" }]}
       />
       {notice ? (
@@ -174,36 +297,30 @@ export function PatientAppointmentsPage() {
       {formError ? <p role="alert" className="mb-4 text-sm text-danger">{formError}</p> : null}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <Card title="Choose a doctor" description="Search by name. A specialization is shown when the hospital has recorded one.">
-          <Input label="Search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Doctor name" />
+        <Card title="Choose a doctor" description="Only doctors with an active hospital account and blockchain role are listed. Consultation hours are informational and are not open slots.">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input label="Doctor name" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <Input label="Specialization" value={specialty} onChange={(event) => setSpecialty(event.target.value)} />
+            <Input label="Department" value={department} onChange={(event) => setDepartment(event.target.value)} />
+            <Input label="Minimum years of experience" value={experience} onChange={(event) => setExperience(event.target.value)} inputMode="numeric" />
+          </div>
           {doctors.phase === "loading" ? <LoadingSkeleton label="Loading doctors" /> : null}
           {doctors.phase === "error" ? <ErrorState title="Doctors unavailable" message={doctors.message} /> : null}
-          {doctors.phase === "ready" && doctors.items.length === 0 ? (
-            <EmptyState title="No doctors match" description="Try another name, or ask the hospital to verify the doctor's account." />
+          {doctors.phase === "ready" && visibleDoctors.length === 0 ? (
+            <EmptyState title="No doctors match" description="Try another name or specialty, or ask the hospital to authorize the doctor." />
           ) : null}
           <div className="mt-4 grid gap-3">
-            {doctors.items.map((doctor) => {
-              const selected = doctor.id === doctorId;
-              return (
-                <button
-                  key={doctor.id}
-                  type="button"
-                  onClick={() => setDoctorId(doctor.id)}
-                  className={`rounded-xl border px-4 py-3 text-left ${selected ? "border-teal bg-teal/5" : "border-line bg-surface"}`}
-                  aria-pressed={selected}
-                >
-                  <span className="block text-sm font-semibold text-navy">{doctor.fullName}</span>
-                  <span className="mt-1 block text-sm text-muted">
-                    {doctor.specialization ? `${doctor.specialization} · ` : ""}
-                    {doctor.hospitalName}
-                  </span>
-                  <span className="mt-1 block text-sm text-muted">
-                    {doctor.availability || "Request a preferred time. The doctor confirms the visit."}
-                  </span>
-                </button>
-              );
-            })}
+            {visibleDoctors.map((doctor) => (
+              <DoctorCard
+                key={doctor.id}
+                doctor={doctor}
+                selected={doctor.id === doctorId}
+                onBook={() => setDoctorId(doctor.id)}
+                onView={() => setViewed(doctor)}
+              />
+            ))}
           </div>
+          {viewed ? <DoctorProfilePanel doctor={viewed} onClose={() => setViewed(null)} /> : null}
         </Card>
 
         <Card title="Request a visit">

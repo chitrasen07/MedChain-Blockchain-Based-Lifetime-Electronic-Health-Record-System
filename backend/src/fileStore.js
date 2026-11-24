@@ -84,7 +84,7 @@ function canonicalUri(bucket, key) {
 }
 
 async function signedRequest({ settings, method, key, body, fetchImpl, now }) {
-  if (!/^v1\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) {
+  if (!/^(?:profile\/)?v1\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) {
     throw Object.assign(new Error("File not found"), { statusCode: 404 });
   }
   const payload = body ? Buffer.from(body) : Buffer.alloc(0);

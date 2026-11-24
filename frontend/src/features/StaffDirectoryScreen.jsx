@@ -55,6 +55,14 @@ function accountLabel(status) {
   return "Active";
 }
 
+function profileLabel(accountRow) {
+  if (accountRow.role !== "doctor") return "Not applicable";
+  if (accountRow.profileStatus === "verified") return "Verified";
+  if (accountRow.profileStatus === "pending") return "Pending verification";
+  if (accountRow.profileStatus === "changes_requested") return "Changes requested";
+  return "Incomplete";
+}
+
 function walletLabel(accountRow) {
   if (!clinicalRole(accountRow.role)) return "Not required";
   if (!accountRow.walletAddress) return "Verification pending";
@@ -75,6 +83,8 @@ export function StaffDirectoryScreen({ pageKey }) {
   const [created, setCreated] = useState("");
   const [issuedCode, setIssuedCode] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [profileView, setProfileView] = useState(null);
+  const [reviewNote, setReviewNote] = useState("");
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState("");
   const [target, setTarget] = useState(null);
@@ -322,6 +332,32 @@ export function StaffDirectoryScreen({ pageKey }) {
     await finishChainAction(accountRow, "grant", saved.authorization.chainRole, saved.authorization.walletAddress);
   }
 
+  async function openProfile(accountRow) {
+    setNotice("");
+    setReviewNote("");
+    try {
+      setProfileView(await adminService.doctorProfile(accountRow.id));
+    } catch (error) {
+      setNotice(requestMessage(error));
+    }
+  }
+
+  async function reviewProfile(decision) {
+    if (!profileView) return;
+    setBusy("profile");
+    setNotice("");
+    try {
+      const saved = await adminService.reviewDoctorProfile(profileView.id, { decision, note: reviewNote });
+      setProfileView(saved);
+      setNotice(decision === "verified" ? "The professional credentials were approved." : "The doctor was asked to update the credentials.");
+      await load();
+    } catch (error) {
+      setNotice(requestMessage(error));
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function copyIssuedCode() {
     if (!issuedCode?.code) return;
     try {
@@ -419,6 +455,8 @@ export function StaffDirectoryScreen({ pageKey }) {
       name: accountRow.fullName || "Not recorded",
       email: accountRow.email,
       role: roleLabel(accountRow.role),
+      specialty: accountRow.role === "doctor" ? (accountRow.specialization || "Not provided") : "",
+      credentials: profileLabel(accountRow),
       status: <StatusBadge tone={accountRow.status === "active" ? "success" : accountRow.status === "pending" ? "warning" : "danger"}>{accountLabel(accountRow.status)}</StatusBadge>,
       authorization: <StatusBadge tone={authorizationTone(label)}>{label}</StatusBadge>,
       wallet: <span title={accountRow.walletAddress || undefined}>{walletLabel(accountRow)}</span>,
@@ -428,6 +466,12 @@ export function StaffDirectoryScreen({ pageKey }) {
           {accountRow.status !== "disabled" && accountRow.id !== user?.id ? (
             <Button size="sm" variant="danger" onClick={() => setTarget(accountRow)}>Disable</Button>
           ) : accountRow.id === user?.id ? "Signed-in account" : "Disabled"}
+          {accountRow.role === "doctor" ? (
+            <Button size="sm" variant="secondary" onClick={() => openProfile(accountRow)} disabled={Boolean(busy)}>View profile</Button>
+          ) : null}
+          {accountRow.role === "doctor" && accountRow.profileStatus === "pending" ? (
+            <Button size="sm" variant="secondary" onClick={() => openProfile(accountRow)} disabled={Boolean(busy)}>Review credentials</Button>
+          ) : null}
           {accountRow.status === "pending" && accountRow.id !== user?.id ? (
             <Button size="sm" variant="secondary" onClick={() => regenerateCode(accountRow)} disabled={Boolean(busy)}>Regenerate activation code</Button>
           ) : null}
@@ -460,6 +504,8 @@ export function StaffDirectoryScreen({ pageKey }) {
               { key: "name", header: "Name" },
               { key: "email", header: "Email" },
               { key: "role", header: "Role" },
+              { key: "specialty", header: "Specialization" },
+              { key: "credentials", header: "Credentials" },
               { key: "status", header: "Account activation" },
               { key: "authorization", header: "Blockchain authorization" },
               { key: "wallet", header: "Wallet" },
@@ -472,6 +518,28 @@ export function StaffDirectoryScreen({ pageKey }) {
           />
         ) : null}
       </Card>
+      {profileView ? (
+        <Card className="mt-4" title={profileView.fullName || "Doctor profile"} description={`${profileView.hospitalName || "Hospital"} · ${profileLabel({ role: "doctor", profileStatus: profileView.verificationStatus })}`}>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <div><dt className="text-muted">Specialization</dt><dd>{profileView.specialization || "Not provided"}</dd></div>
+            <div><dt className="text-muted">Experience</dt><dd>{Number.isInteger(profileView.experienceYears) ? `${profileView.experienceYears} years` : "Not provided"}</dd></div>
+            <div><dt className="text-muted">Registration</dt><dd>{profileView.registrationNumber || "Not provided"}{profileView.registrationCouncil ? ` · ${profileView.registrationCouncil}` : ""}</dd></div>
+            <div><dt className="text-muted">Department</dt><dd>{profileView.department || "Not provided"}</dd></div>
+            <div className="sm:col-span-2"><dt className="text-muted">Education</dt><dd>{profileView.qualifications?.length ? profileView.qualifications.map((item) => `${item.degree}, ${item.institution}`).join("; ") : "Not provided"}</dd></div>
+            <div className="sm:col-span-2"><dt className="text-muted">Biography</dt><dd>{profileView.biography || "Not provided"}</dd></div>
+          </dl>
+          {profileView.verificationStatus === "pending" ? (
+            <div className="mt-4 grid gap-3">
+              <Input label="Note for the doctor" value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} maxLength={500} />
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button type="button" onClick={() => reviewProfile("verified")} disabled={Boolean(busy)}>Approve credentials</Button>
+                <Button type="button" variant="secondary" onClick={() => reviewProfile("changes_requested")} disabled={Boolean(busy)}>Request changes</Button>
+              </div>
+            </div>
+          ) : null}
+          <Button className="mt-4" type="button" variant="secondary" onClick={() => setProfileView(null)}>Close</Button>
+        </Card>
+      ) : null}
       {issuedCode ? (
         <Card className="mt-4" title="Activation code" description={`Share this code with ${issuedCode.name} through a channel you trust. It is shown only once, works on another computer, and the previous code stops working if you generate a new one.`}>
           <p className="break-all font-mono text-lg tracking-wide text-navy">{issuedCode.code}</p>

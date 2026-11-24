@@ -12,6 +12,7 @@ const { registerClinicalRecords, openClinicalAccess, noteClinicalAudit } = requi
 const { CONSENT_REQUIRED } = require("./consentChain");
 const { registerNursing } = require("./nursing");
 const { registerAppointments } = require("./appointments");
+const { PHOTO_REJECTED, registerDoctorProfiles } = require("./doctorProfiles");
 const { registerActivityAudit, recordActivity } = require("./activityAudit");
 const { registerMedicalFiles, SIZE_REJECTED } = require("./medicalFiles");
 const { createUnavailableFileStore } = require("./fileStore");
@@ -224,7 +225,7 @@ function skipDemoRateLimit(config) {
   return (req) => Boolean(config.demoDisableRateLimit) && DEMO_RATE_LIMIT_PATHS.has(req.path);
 }
 
-function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
+function createApp({ db, blockchain, config, fileStore, maxFileBytes, profileStore } = {}) {
   const app = express();
   app.set("trust proxy", config.trustProxy === 1 ? 1 : false);
   app.use(helmet());
@@ -969,6 +970,7 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
   registerClinicalRecords(app, { db, blockchain, config, authRateLimit });
   registerNursing(app, { db, blockchain, config });
   registerAppointments(app, { db, config });
+  registerDoctorProfiles(app, { db, config, fileStore: fileStore || createUnavailableFileStore(), store: profileStore });
   registerActivityAudit(app, { db, blockchain, config });
   registerMedicalFiles(app, {
     db,
@@ -987,7 +989,8 @@ function createApp({ db, blockchain, config, fileStore, maxFileBytes }) {
 
   app.use((error, _req, res, _next) => {
     if (error?.type === "entity.too.large" || error?.status === 413 || error?.statusCode === 413) {
-      return res.status(400).json({ error: SIZE_REJECTED });
+      const photo = String(_req.originalUrl || "").includes("/profile/photo");
+      return res.status(400).json({ error: photo ? PHOTO_REJECTED : SIZE_REJECTED });
     }
     if (error.name === "ZodError") return res.status(400).json({ error: "Invalid request" });
     const publicError = error.code === "23505" && error.constraint === "users_email_key"

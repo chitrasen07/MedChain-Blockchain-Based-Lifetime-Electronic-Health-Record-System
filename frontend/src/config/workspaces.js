@@ -42,6 +42,7 @@ export const workspaces = {
     pending: false,
     nav: [
       { label: "Overview", to: "/doctor", end: true, icon: Stethoscope },
+      { label: "My Profile", to: "/doctor/profile", icon: UserRound },
       { label: "Appointments", to: "/doctor/appointments", icon: CalendarDays },
       { label: "Activity", to: "/doctor/activity", icon: ScrollText },
       { label: "Patient Lookup", to: "/doctor/lookup", icon: Search },

@@ -12,6 +12,7 @@ import {
 } from "./pages/admin/AdminPages";
 import { DoctorEmergencyPage, DoctorLookupPage, DoctorOverviewPage, DoctorRecordsPage, DoctorReviewPage, DoctorVisitsPage } from "./pages/doctor/DoctorPages";
 import { DoctorAppointmentsPage } from "./features/DoctorAppointments";
+import { DoctorProfilePage } from "./features/DoctorProfile";
 import { PatientAppointmentsPage } from "./features/PatientAppointments";
 import { ActivityScreen } from "./features/ActivityScreen";
 import { EmergencyDashboardPage } from "./pages/emergency/EmergencyDashboardPage";
@@ -64,6 +65,7 @@ export default function App() {
         <Route element={<ProtectedRoute allow="doctor" />}>
           <Route element={<AppLayout workspace={workspaces.doctor} />}>
             <Route path="/doctor" element={<DoctorOverviewPage />} />
+            <Route path="/doctor/profile" element={<DoctorProfilePage />} />
             <Route path="/doctor/appointments" element={<DoctorAppointmentsPage />} />
             <Route path="/doctor/activity" element={<ActivityScreen path="/doctor/activity" title="My activity" description="Your sign-ins, clinical access, and appointment actions. A patient's history opens only while you have current access." crumbs={[{ label: "Doctor", to: "/doctor" }, { label: "Activity" }]} allowPatient />} />
             <Route path="/doctor/lookup" element={<DoctorLookupPage />} />
